@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "paths": {
+      "@saab/shared": ["../packages/shared/src"]
+    }
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../packages/shared" }
+  ]
+}

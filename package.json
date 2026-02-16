@@ -1,0 +1,20 @@
+{
+  "name": "saab-game",
+  "private": true,
+  "workspaces": [
+    "packages/shared",
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "npm run dev -w client",
+    "dev:server": "npm run dev -w server",
+    "build": "npm run build -w packages/shared && concurrently \"npm run build -w client\" \"npm run build -w server\"",
+    "start": "npm run start -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  }
+}

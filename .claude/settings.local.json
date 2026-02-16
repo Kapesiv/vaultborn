@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(git init:*)",
+      "Bash(npm install:*)",
+      "Bash(where:*)",
+      "Bash(echo:*)",
+      "Bash(cmd.exe /c \"where node 2>nul & where npm 2>nul & where pnpm 2>nul\")",
+      "Bash(cmd.exe /c \"node --version 2>nul && npm --version 2>nul\")",
+      "Bash(cmd.exe /c \"bun --version 2>nul & deno --version 2>nul & fnm --version 2>nul & nvm version 2>nul\")",
+      "Bash(cmd.exe /c \"dir /s /b C:\\\\Users\\\\kappu\\\\AppData\\\\*node.exe 2>nul\")",
+      "Bash(powershell.exe -Command \"Get-Command node -ErrorAction SilentlyContinue | Select-Object Source; Get-Command npm -ErrorAction SilentlyContinue | Select-Object Source\")",
+      "Bash(cmd.exe /c \"winget --version 2>nul\")",
+      "Bash(powershell.exe -Command \"winget --version\")",
+      "Bash(powershell.exe -Command \"winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Program Files\\\\nodejs\\\\node.exe'' --version; & ''C:\\\\Program Files\\\\nodejs\\\\npm.cmd'' --version\")",
+      "Bash(export PATH=\"/c/Program Files/nodejs:$PATH\")",
+      "Bash(timeout 8 npx tsx:*)",
+      "Bash(timeout 10 npx vite:*)",
+      "Bash(timeout 12 npm run dev:*)",
+      "Bash(npm run dev:*)",
+      "Bash(powershell.exe -Command \"Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object OwningProcess | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }\")",
+      "Bash(curl:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(gh:*)",
+      "Bash(npx vite build:*)",
+      "Bash(cmd.exe /c \"where gh\")",
+      "Bash(cmd.exe /c \"gh --version\")",
+      "Bash(winget install:*)",
+      "Bash(unzip:*)",
+      "Bash(/c/Users/kappu/gh-cli/bin/gh.exe:*)",
+      "Bash(npx:*)",
+      "Bash(taskkill:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
