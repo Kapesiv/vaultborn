@@ -43,6 +43,7 @@ defineTypes(PlayerStatsState, {
 export class PlayerState extends Schema {
   id: string = '';
   name: string = '';
+  gender: string = 'male';
   position: Vec3State = new Vec3State();
   rotation: number = 0;
   stats: PlayerStatsState = new PlayerStatsState();
@@ -52,6 +53,7 @@ export class PlayerState extends Schema {
 defineTypes(PlayerState, {
   id: 'string',
   name: 'string',
+  gender: 'string',
   position: Vec3State,
   rotation: 'float32',
   stats: PlayerStatsState,

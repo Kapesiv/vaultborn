@@ -370,7 +370,7 @@ export class DungeonRoom extends Room<DungeonState> {
     });
   }
 
-  onJoin(client: Client, options: { name?: string }) {
+  onJoin(client: Client, options: { name?: string; gender?: string }) {
     const playerName = options.name || `Player_${client.sessionId.slice(0, 4)}`;
 
     // Ensure player exists in DB
@@ -379,6 +379,7 @@ export class DungeonRoom extends Room<DungeonState> {
     const player = new PlayerState();
     player.id = client.sessionId;
     player.name = playerName;
+    player.gender = options.gender === 'female' ? 'female' : 'male';
     player.position = new Vec3State();
     player.position.x = 0;
     player.position.z = -8;

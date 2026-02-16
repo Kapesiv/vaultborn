@@ -69,7 +69,7 @@ export class HubRoom extends Room<HubState> {
     console.log('HubRoom created');
   }
 
-  onJoin(client: Client, options: { name?: string }) {
+  onJoin(client: Client, options: { name?: string; gender?: string }) {
     const playerName = options.name || `Player_${client.sessionId.slice(0, 4)}`;
 
     // Ensure player exists in DB
@@ -78,9 +78,15 @@ export class HubRoom extends Room<HubState> {
     const player = new PlayerState();
     player.id = client.sessionId;
     player.name = playerName;
+    player.gender = options.gender === 'female' ? 'female' : 'male';
     player.position = new Vec3State();
-    player.position.x = Math.random() * 10 - 5;
-    player.position.z = Math.random() * 10 - 5;
+
+    // Spawn outside the fountain (radius ~3.6) and altar area
+    // Pick a random angle and place 6-10 units from center
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 6 + Math.random() * 4;
+    player.position.x = Math.cos(angle) * dist;
+    player.position.z = Math.sin(angle) * dist;
     this.state.players.set(client.sessionId, player);
 
     // Send full inventory

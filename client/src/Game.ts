@@ -130,7 +130,7 @@ export class Game {
     // Build hub world
     this.hubWorld = new HubWorld(this.sceneManager.scene);
 
-    const room = await this.network.joinRoom('hub', { name: playerName });
+    const room = await this.network.joinRoom('hub', { name: playerName, gender });
     this.localPlayer = new LocalPlayer(this.sceneManager.scene, gender);
     this.setupRoomListeners(room);
     this.currentRoom = 'hub';
@@ -146,9 +146,11 @@ export class Game {
     room.state.players.onAdd((player: any, sessionId: string) => {
       console.log('[DEBUG] onAdd player:', sessionId, 'name:', player.name, 'local:', this.network.getSessionId());
       if (sessionId === this.network.getSessionId()) return;
-      console.log('[DEBUG] Creating RemotePlayer at', player.position.x, player.position.y, player.position.z);
-      const remote = new RemotePlayer(this.sceneManager.scene, sessionId, player.name);
+      const gender = (player.gender === 'female' ? 'female' : 'male') as Gender;
+      console.log('[DEBUG] Creating RemotePlayer at', player.position.x, player.position.y, player.position.z, 'gender:', gender);
+      const remote = new RemotePlayer(this.sceneManager.scene, sessionId, player.name, gender);
       remote.targetPosition.set(player.position.x, player.position.y, player.position.z);
+      remote.mesh.position.copy(remote.targetPosition);
       this.remotePlayers.set(sessionId, remote);
 
       player.position.onChange(() => {
@@ -226,7 +228,7 @@ export class Game {
       this.hubWorld.group.visible = roomType === 'hub';
     }
 
-    const room = await this.network.joinRoom(roomType, { ...options, name: this.playerName });
+    const room = await this.network.joinRoom(roomType, { ...options, name: this.playerName, gender: this.playerGender });
     this.setupRoomListeners(room);
 
     if (this.localPlayer) {
@@ -345,7 +347,7 @@ export class Game {
 
     // Update entities
     this.localPlayer?.update(dt, this.elapsedTime, this.isMoving);
-    this.remotePlayers.forEach(p => p.update(dt));
+    this.remotePlayers.forEach(p => p.update(dt, this.elapsedTime));
     this.monsters.forEach(m => m.update(dt));
     this.lootDrops.forEach(l => l.update(dt));
 
