@@ -3,9 +3,10 @@ dist/
 *.db
 *.db-wal
 *.db-shm
-data/
+/data/
 .env
 .env.*
 *.log
+*.tsbuildinfo
 .DS_Store
 Thumbs.db

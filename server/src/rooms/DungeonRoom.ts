@@ -617,7 +617,7 @@ export class DungeonRoom extends Room<DungeonState> {
       runtime.attackTimer = Math.max(0, runtime.attackTimer - dt);
 
       // Find closest player
-      let closestPlayer: PlayerState | null = null;
+      let closestPlayer: PlayerState | null = null as PlayerState | null;
       let closestDist = Infinity;
       this.state.players.forEach((p) => {
         if (p.stats.hp <= 0) return;
@@ -713,7 +713,7 @@ export class DungeonRoom extends Room<DungeonState> {
     });
   }
 
-  onJoin(client: Client, options: { name?: string }) {
+  onJoin(client: Client, options: { name?: string; gender?: string }) {
     const playerName = options.name || `Player_${client.sessionId.slice(0, 4)}`;
 
     this.inventory.ensurePlayer(client.sessionId, playerName);
@@ -721,6 +721,7 @@ export class DungeonRoom extends Room<DungeonState> {
     const player = new PlayerState();
     player.id = client.sessionId;
     player.name = playerName;
+    player.gender = options.gender === 'female' ? 'female' : 'male';
     player.position = new Vec3State();
     player.position.x = 0;
     player.position.z = -8;

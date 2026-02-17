@@ -19,8 +19,11 @@ import { mountSettingsMenu, showSettings, hideSettings, isSettingsOpen } from '.
 import { mountFloorHUD, type FloorInfo } from './ui/FloorHUD.js';
 import { mountFloorClearedPanel, showFloorCleared, showDungeonComplete, hideFloorClearedPanel } from './ui/FloorClearedPanel.js';
 import { mountLevelUpEffect, showLevelUp } from './ui/LevelUpEffect.js';
+import { mountSkillTreePanel, toggleSkillTreePanel, hideSkillTreePanel } from './ui/SkillTreePanel.js';
+import { mountSkillHotbar } from './ui/SkillHotbar.js';
 import { MusicSystem } from './systems/MusicSystem.js';
 import { inventoryManager } from './systems/InventoryManager.js';
+import { skillManager } from './systems/SkillManager.js';
 import { setNetworkManager } from './network/actions.js';
 import { CLIENT_INPUT_RATE } from '@saab/shared';
 
@@ -101,6 +104,8 @@ export class Game {
       },
     });
     mountLevelUpEffect(uiOverlay);
+    mountSkillTreePanel(uiOverlay);
+    mountSkillHotbar(uiOverlay);
 
     // ESC to close panels / toggle pause
     window.addEventListener('keydown', (e) => {
@@ -111,12 +116,16 @@ export class Game {
           hideNPCDialog();
           hideShopPanel();
           hideInventoryPanel();
+          hideSkillTreePanel();
         } else {
           this.pause();
         }
       }
       if (e.code === 'KeyI' || e.code === 'KeyB') {
         if (!this.paused) toggleInventoryPanel();
+      }
+      if (e.code === 'KeyK') {
+        if (!this.paused) toggleSkillTreePanel();
       }
     });
   }
@@ -126,10 +135,12 @@ export class Game {
     const npcRoot = document.getElementById('npc-dialog-root');
     const shopRoot = document.getElementById('shop-panel-root');
     const invRoot = document.getElementById('inventory-panel-root');
+    const skillRoot = document.getElementById('skill-tree-root');
     return !!(
       (npcRoot && npcRoot.children.length > 0 && npcRoot.innerHTML.length > 10) ||
       (shopRoot && shopRoot.children.length > 0 && shopRoot.innerHTML.length > 10) ||
-      (invRoot && invRoot.children.length > 0 && invRoot.innerHTML.length > 10)
+      (invRoot && invRoot.children.length > 0 && invRoot.innerHTML.length > 10) ||
+      (skillRoot && skillRoot.children.length > 0 && skillRoot.innerHTML.length > 10)
     );
   }
 
@@ -152,7 +163,7 @@ export class Game {
     // Build hub world
     this.hubWorld = new HubWorld(this.sceneManager.scene);
 
-    const room = await this.network.joinRoom('hub', { name: playerName });
+    const room = await this.network.joinRoom('hub', { name: playerName, gender });
     this.localPlayer = new LocalPlayer(this.sceneManager.scene, gender);
     this.setupRoomListeners(room);
     this.currentRoom = 'hub';
@@ -166,11 +177,12 @@ export class Game {
 
   private setupRoomListeners(room: any) {
     room.state.players.onAdd((player: any, sessionId: string) => {
+      console.log('[DEBUG] onAdd player:', sessionId, 'name:', player.name, 'local:', this.network.getSessionId());
       if (sessionId === this.network.getSessionId()) return;
-      const remote = new RemotePlayer(
-        this.sceneManager.scene, sessionId, player.name,
-        player.position.x, player.position.y, player.position.z,
-      );
+      const gender = (player.gender === 'female' ? 'female' : 'male') as Gender;
+      const remote = new RemotePlayer(this.sceneManager.scene, sessionId, player.name, gender);
+      remote.targetPosition.set(player.position.x, player.position.y, player.position.z);
+      remote.mesh.position.copy(remote.targetPosition);
       this.remotePlayers.set(sessionId, remote);
 
       player.position.onChange(() => {
@@ -271,7 +283,7 @@ export class Game {
       }
     }
 
-    const room = await this.network.joinRoom(roomType, { ...options, name: this.playerName });
+    const room = await this.network.joinRoom(roomType, { ...options, name: this.playerName, gender: this.playerGender });
     this.setupRoomListeners(room);
 
     if (this.localPlayer) {
@@ -345,6 +357,16 @@ export class Game {
       this.floorClearedShowing = true;
     } else if (type === 'return_to_hub') {
       this.switchRoom('hub');
+    } else if (type === 'skills_full') {
+      skillManager.setFull(data.allocations, data.hotbar, data.skillPoints);
+    } else if (type === 'skills_updated') {
+      skillManager.setAllocations(data.allocations, data.skillPoints);
+    } else if (type === 'hotbar_updated') {
+      skillManager.setHotbar(data.hotbar);
+    } else if (type === 'skill_used') {
+      skillManager.startCooldown(data.skillId, data.cooldown);
+    } else if (type === 'skill_fail') {
+      console.log(`Skill failed: ${data.error}`);
     }
   }
 
@@ -421,7 +443,7 @@ export class Game {
 
     // Update entities
     this.localPlayer?.update(dt, this.elapsedTime, this.isMoving);
-    this.remotePlayers.forEach(p => p.update(dt));
+    this.remotePlayers.forEach(p => p.update(dt, this.elapsedTime));
     this.monsters.forEach(m => m.update(dt));
     this.lootDrops.forEach(l => l.update(dt));
 
