@@ -1,4 +1,5 @@
 import type { PlayerInput } from '@saab/shared';
+import { skillManager } from '../systems/SkillManager.js';
 
 export class InputManager {
   private keys = new Map<string, boolean>();
@@ -6,6 +7,7 @@ export class InputManager {
   private mouseDx = 0;
   private mouseDy = 0;
   private attackQueued: string | null = null;
+  private skillQueued: number | null = null; // hotbar slot 0-3
   private jumpQueued = false;
   private seq = 0;
 
@@ -17,6 +19,11 @@ export class InputManager {
         e.preventDefault();
         this.jumpQueued = true;
       }
+      // Skill hotkeys 1-4
+      if (e.code === 'Digit1') this.skillQueued = 0;
+      if (e.code === 'Digit2') this.skillQueued = 1;
+      if (e.code === 'Digit3') this.skillQueued = 2;
+      if (e.code === 'Digit4') this.skillQueued = 3;
     });
 
     window.addEventListener('keyup', (e) => {
@@ -78,6 +85,15 @@ export class InputManager {
     if (this.attackQueued) {
       input.attack = this.attackQueued;
       this.attackQueued = null;
+    }
+
+    // Skill hotkey overrides basic attack
+    if (this.skillQueued !== null) {
+      const skillId = skillManager.getHotbarSkillId(this.skillQueued);
+      if (skillId && !skillManager.isOnCooldown(skillId)) {
+        input.attack = skillId;
+      }
+      this.skillQueued = null;
     }
 
     this.jumpQueued = false;

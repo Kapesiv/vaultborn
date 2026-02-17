@@ -775,6 +775,7 @@ export class DungeonRoom extends Room<DungeonState> {
     }
     this.state.players.delete(client.sessionId);
     this.playerAttackTimers.delete(client.sessionId);
+    this.skillCooldowns.delete(client.sessionId);
   }
 
   onDispose() {

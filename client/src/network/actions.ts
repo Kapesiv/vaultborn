@@ -17,3 +17,15 @@ export function shopSell(instanceId: string) {
 export function requestInventory() {
   nm?.sendMessage('request_inventory', {});
 }
+
+export function allocateSkill(nodeId: string) {
+  nm?.sendMessage('allocate_skill', { nodeId });
+}
+
+export function setHotbar(slot: number, skillId: string) {
+  nm?.sendMessage('set_hotbar', { slot, skillId });
+}
+
+export function requestSkills() {
+  nm?.sendMessage('request_skills', {});
+}
