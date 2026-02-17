@@ -1,5 +1,6 @@
 import type { PlayerInput } from '@saab/shared';
 import { skillManager } from '../systems/SkillManager.js';
+import { MobileTouchControls } from '../MobileTouchControls.js';
 
 export class InputManager {
   private keys = new Map<string, boolean>();
@@ -10,8 +11,11 @@ export class InputManager {
   private skillQueued: number | null = null; // hotbar slot 0-3
   private jumpQueued = false;
   private seq = 0;
+  private touch: MobileTouchControls;
 
   constructor(canvas: HTMLCanvasElement) {
+    this.touch = new MobileTouchControls();
+    this.touch.onAttack = () => { this.attackQueued = 'basic'; };
     window.addEventListener('keydown', (e) => {
       this.keys.set(e.code, true);
       // Space = jump
@@ -56,7 +60,16 @@ export class InputManager {
   }
 
   isKey(code: string): boolean {
-    return this.keys.get(code) || false;
+    if (this.keys.get(code)) return true;
+    // Merge touch joystick into key checks
+    if (this.touch.isActive()) {
+      const t = this.touch.getInput();
+      if (code === 'KeyW' && t.forward) return true;
+      if (code === 'KeyS' && t.backward) return true;
+      if (code === 'KeyA' && t.left) return true;
+      if (code === 'KeyD' && t.right) return true;
+    }
+    return false;
   }
 
   isMoving(): boolean {
@@ -71,12 +84,14 @@ export class InputManager {
   }
 
   getInput(rotation: number, dt: number): PlayerInput {
+    // Touch joystick merges with keyboard
+    const touchInput = this.touch.isActive() ? this.touch.getInput() : null;
     const input: PlayerInput = {
       seq: this.seq++,
-      forward: this.isKey('KeyW'),
-      backward: this.isKey('KeyS'),
-      left: this.isKey('KeyA'),
-      right: this.isKey('KeyD'),
+      forward: this.isKey('KeyW') || (touchInput?.forward ?? false),
+      backward: this.isKey('KeyS') || (touchInput?.backward ?? false),
+      left: this.isKey('KeyA') || (touchInput?.left ?? false),
+      right: this.isKey('KeyD') || (touchInput?.right ?? false),
       jump: this.jumpQueued,
       rotation,
       dt,
