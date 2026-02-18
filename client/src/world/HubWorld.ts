@@ -15,6 +15,81 @@ function smoothstepJS(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+/** Seeded PRNG for deterministic bone displacement */
+function boneRand(seed: number): () => number {
+  let s = seed;
+  return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+/** Displace bone geometry vertices along normals for organic surface texture */
+function displaceBone(geo: THREE.BufferGeometry, strength: number, seed: number): void {
+  geo.computeVertexNormals();
+  const pos = geo.attributes.position;
+  const nor = geo.attributes.normal;
+  if (!nor) return;
+  const rand = boneRand(seed);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const nx = nor.getX(i), ny = nor.getY(i), nz = nor.getZ(i);
+    const n1 = Math.sin(x * 4.1 + seed) * Math.cos(z * 3.7 + seed * 0.5);
+    const n2 = Math.sin(y * 6.3 + seed * 1.3) * Math.cos(x * 5.1 + seed * 0.7);
+    const disp = (n1 + n2) * 0.5 * strength + (rand() - 0.5) * strength * 0.3;
+    pos.setX(i, x + nx * disp);
+    pos.setY(i, y + ny * disp);
+    pos.setZ(i, z + nz * disp);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+}
+
+/** Apply vertex-color weathering: cracks, moss, bleaching, age darkening */
+function applyBoneWeathering(geo: THREE.BufferGeometry, params: {
+  baseColor?: [number, number, number];
+  crackDarkness?: number;
+  mossAmount?: number;
+  bleachAmount?: number;
+  seed?: number;
+}): void {
+  const {
+    baseColor = [0.83, 0.78, 0.63],
+    crackDarkness = 0.15,
+    mossAmount = 0.1,
+    bleachAmount = 0.08,
+    seed = 42,
+  } = params;
+  const pos = geo.attributes.position;
+  if (!geo.attributes.normal) geo.computeVertexNormals();
+  const nor = geo.attributes.normal;
+  const count = pos.count;
+  const colors = new Float32Array(count * 3);
+  const rand = boneRand(seed);
+  for (let i = 0; i < count; i++) {
+    let r = baseColor[0], g = baseColor[1], b = baseColor[2];
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const ny = nor ? nor.getY(i) : 0;
+    const crack = Math.abs(Math.sin(x * 12.7 + z * 9.3 + seed * 2.1));
+    if (crack > 0.92) {
+      const d = crackDarkness * ((crack - 0.92) / 0.08);
+      r -= d; g -= d; b -= d;
+    }
+    if (ny > 0.3) {
+      const m = mossAmount * (ny - 0.3) * (0.5 + rand() * 0.5);
+      r -= m * 0.3; g += m * 0.15; b -= m * 0.2;
+    }
+    if (ny > 0.5) {
+      r += bleachAmount * ny; g += bleachAmount * ny * 0.9; b += bleachAmount * ny * 0.7;
+    }
+    const low = Math.max(0, -ny) * 0.1;
+    r -= low; g -= low; b -= low;
+    const v = (rand() - 0.5) * 0.04;
+    r += v; g += v; b += v;
+    colors[i * 3] = Math.max(0, Math.min(1, r));
+    colors[i * 3 + 1] = Math.max(0, Math.min(1, g));
+    colors[i * 3 + 2] = Math.max(0, Math.min(1, b));
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
 export class HubWorld {
   public group: THREE.Group;
 
@@ -38,6 +113,7 @@ export class HubWorld {
     this.buildNPCs();
     this.buildSpawnAltar();
     this.buildDecorations();
+    this.buildRocks();
     this.buildLighting();
 
     scene.add(this.group);
@@ -637,391 +713,156 @@ export class HubWorld {
 
   private buildShop() {
     const pos = this.shopPosition;
-    const shop = new THREE.Group();
-    shop.name = 'shop-building';
+    const stall = new THREE.Group();
+    stall.name = 'shop-stall';
 
     // --- Materials ---
-    // Realistic wood: dark oak logs, lighter planks, weathered trim
-    const logMat = new THREE.MeshStandardMaterial({ color: 0x3e2410, roughness: 0.95, metalness: 0 });
-    const plankMat = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.9, metalness: 0 });
-    const plankLightMat = new THREE.MeshStandardMaterial({ color: 0x8b6842, roughness: 0.88, metalness: 0 });
-    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x5a5550, roughness: 0.92, metalness: 0.05 });
-    const stoneBaseMat = new THREE.MeshStandardMaterial({ color: 0x4a4540, roughness: 0.95 });
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0x3a2a18, roughness: 0.92, side: THREE.DoubleSide });
-    const roofEdgeMat = new THREE.MeshStandardMaterial({ color: 0x2a1a0a, roughness: 0.95 });
-    const glassMat = new THREE.MeshPhysicalMaterial({
-      color: 0x88aacc, roughness: 0.05, metalness: 0.0,
-      transmission: 0.85, thickness: 0.1, transparent: true, opacity: 0.6,
-    });
-    const leadMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.7, metalness: 0.4 });
+    const darkWood = new THREE.MeshStandardMaterial({ color: 0x3e2410, roughness: 0.92, metalness: 0 });
+    const plank = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.9, metalness: 0 });
+    const plankLight = new THREE.MeshStandardMaterial({ color: 0x8b6842, roughness: 0.88, metalness: 0 });
+    const canvasMat = new THREE.MeshStandardMaterial({ color: 0xc2a672, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
+    const canvasStripe = new THREE.MeshStandardMaterial({ color: 0x8b3a3a, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
     const metalMat = new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.6, roughness: 0.4 });
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x5a5550, roughness: 0.92, metalness: 0.05 });
 
-    const W = 7, D = 5, wallH = 3.5;
+    const W = 5, D = 2.5;
+    const counterH = 1.05;
+    const postH = 2.8;
 
     // ============================
-    // STONE FOUNDATION
+    // STONE BASE — cobblestone pad
     // ============================
-    const foundH = 0.5;
-    const foundation = new THREE.Mesh(
-      new THREE.BoxGeometry(W + 0.3, foundH, D + 0.3), stoneBaseMat,
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(3.2, 3.4, 0.12, 8), stoneMat,
     );
-    foundation.position.set(0, foundH / 2, 0);
-    foundation.receiveShadow = true;
-    foundation.castShadow = true;
-    shop.add(foundation);
-
-    // Foundation stone detail
-    for (let i = 0; i < 12; i++) {
-      const stoneW = 0.4 + Math.random() * 0.6;
-      const stoneH = 0.15 + Math.random() * 0.15;
-      const stone = new THREE.Mesh(
-        new THREE.BoxGeometry(stoneW, stoneH, 0.15), stoneMat,
-      );
-      const angle = (i / 12) * Math.PI * 2;
-      const onFront = i < 4;
-      const onBack = i >= 4 && i < 8;
-      if (onFront) {
-        stone.position.set(-2.5 + i * 1.5 + Math.random() * 0.3, 0.2 + Math.random() * 0.2, D / 2 + 0.08);
-      } else if (onBack) {
-        stone.position.set(-2.5 + (i - 4) * 1.5 + Math.random() * 0.3, 0.2 + Math.random() * 0.2, -D / 2 - 0.08);
-      } else {
-        stone.position.set(
-          (i < 10 ? -1 : 1) * (W / 2 + 0.08),
-          0.2 + Math.random() * 0.2,
-          -1.5 + (i % 2) * 2 + Math.random() * 0.5,
-        );
-        stone.rotation.y = Math.PI / 2;
-      }
-      shop.add(stone);
-    }
+    base.position.set(0, 0.06, 0);
+    base.receiveShadow = true;
+    stall.add(base);
 
     // ============================
-    // LOG WALLS — horizontal stacked logs
+    // COUNTER — wooden table
     // ============================
-    const logRows = 9;
-    const logRadius = 0.18;
+    const top = new THREE.Mesh(
+      new THREE.BoxGeometry(W, 0.1, D), plankLight,
+    );
+    top.position.set(0, counterH, 0);
+    top.castShadow = true;
+    top.receiveShadow = true;
+    stall.add(top);
 
-    // Back wall logs
-    for (let row = 0; row < logRows; row++) {
-      const log = new THREE.Mesh(
-        new THREE.CylinderGeometry(logRadius, logRadius * 1.05, W - 0.2, 8),
-        logMat,
-      );
-      log.rotation.z = Math.PI / 2;
-      log.position.set(0, foundH + logRadius + row * logRadius * 1.85, -D / 2 + 0.1);
-      log.castShadow = true;
-      shop.add(log);
-    }
+    // Front board
+    const frontBoard = new THREE.Mesh(
+      new THREE.BoxGeometry(W, counterH * 0.6, 0.07), plank,
+    );
+    frontBoard.position.set(0, counterH * 0.45, D / 2 - 0.02);
+    frontBoard.castShadow = true;
+    stall.add(frontBoard);
 
-    // Side walls (with window gap on left side)
+    // Side boards
     for (const side of [-1, 1]) {
-      for (let row = 0; row < logRows; row++) {
-        const y = foundH + logRadius + row * logRadius * 1.85;
-        // Window gap on right side (player-facing) rows 3-6
-        if (side === 1 && row >= 3 && row <= 6) {
-          // Short log sections on either side of window
-          for (const wSide of [-1, 1]) {
-            const shortLog = new THREE.Mesh(
-              new THREE.CylinderGeometry(logRadius, logRadius * 1.05, D * 0.25, 8),
-              logMat,
-            );
-            shortLog.rotation.x = Math.PI / 2;
-            shortLog.position.set(side * (W / 2 - 0.1), y, wSide * (D / 2 - D * 0.12));
-            shortLog.castShadow = true;
-            shop.add(shortLog);
-          }
-        } else {
-          const log = new THREE.Mesh(
-            new THREE.CylinderGeometry(logRadius, logRadius * 1.05, D - 0.2, 8),
-            logMat,
-          );
-          log.rotation.x = Math.PI / 2;
-          log.position.set(side * (W / 2 - 0.1), y, 0);
-          log.castShadow = true;
-          shop.add(log);
-        }
-      }
+      const sideBoard = new THREE.Mesh(
+        new THREE.BoxGeometry(0.07, counterH * 0.6, D - 0.1), plank,
+      );
+      sideBoard.position.set(side * (W / 2 - 0.02), counterH * 0.45, 0);
+      sideBoard.castShadow = true;
+      stall.add(sideBoard);
     }
 
-    // Front wall — two sections with door gap in the middle
-    const doorW = 1.8;
-    for (let row = 0; row < logRows; row++) {
-      const y = foundH + logRadius + row * logRadius * 1.85;
-      // Door gap for rows 0-7
-      if (row < 8) {
-        for (const side of [-1, 1]) {
-          const sectionW = (W - doorW) / 2 - 0.2;
-          const log = new THREE.Mesh(
-            new THREE.CylinderGeometry(logRadius, logRadius * 1.05, sectionW, 8),
-            logMat,
-          );
-          log.rotation.z = Math.PI / 2;
-          log.position.set(side * (doorW / 2 + sectionW / 2 + 0.1), y, D / 2 - 0.1);
-          log.castShadow = true;
-          shop.add(log);
-        }
-      } else {
-        // Top row spans full width (above door lintel)
-        const log = new THREE.Mesh(
-          new THREE.CylinderGeometry(logRadius, logRadius * 1.05, W - 0.2, 8),
-          logMat,
+    // Four corner legs
+    for (const lx of [-W / 2 + 0.1, W / 2 - 0.1]) {
+      for (const lz of [-D / 2 + 0.1, D / 2 - 0.1]) {
+        const leg = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12, counterH, 0.12), darkWood,
         );
-        log.rotation.z = Math.PI / 2;
-        log.position.set(0, y, D / 2 - 0.1);
-        log.castShadow = true;
-        shop.add(log);
+        leg.position.set(lx, counterH / 2, lz);
+        leg.castShadow = true;
+        stall.add(leg);
       }
     }
 
     // ============================
-    // DOOR — heavy wooden plank door
+    // CANOPY — canvas awning on 4 posts
     // ============================
-    const doorH = 2.8;
-    const doorFrame = new THREE.Mesh(
-      new THREE.BoxGeometry(doorW + 0.2, doorH + 0.1, 0.15), plankMat,
-    );
-    doorFrame.position.set(0, foundH + doorH / 2, D / 2 - 0.05);
-    shop.add(doorFrame);
-
-    // Door planks (vertical boards)
-    for (let i = 0; i < 5; i++) {
-      const plank = new THREE.Mesh(
-        new THREE.BoxGeometry(doorW / 5 - 0.02, doorH - 0.15, 0.08), plankLightMat,
-      );
-      plank.position.set(-doorW / 2 + doorW / 10 + i * doorW / 5, foundH + doorH / 2, D / 2 + 0.02);
-      plank.castShadow = true;
-      shop.add(plank);
-    }
-
-    // Door cross braces (Z-pattern)
-    const braceMat = new THREE.MeshStandardMaterial({ color: 0x2a1808, roughness: 0.92 });
-    for (const bY of [foundH + 0.8, foundH + doorH - 0.5]) {
-      const brace = new THREE.Mesh(
-        new THREE.BoxGeometry(doorW - 0.2, 0.12, 0.04), braceMat,
-      );
-      brace.position.set(0, bY, D / 2 + 0.07);
-      shop.add(brace);
-    }
-    // Diagonal
-    const diagBrace = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, doorH * 0.7, 0.04), braceMat,
-    );
-    diagBrace.position.set(0, foundH + doorH / 2, D / 2 + 0.07);
-    diagBrace.rotation.z = 0.45;
-    shop.add(diagBrace);
-
-    // Door handle (iron ring)
-    const handle = new THREE.Mesh(
-      new THREE.TorusGeometry(0.08, 0.015, 6, 10),
-      metalMat,
-    );
-    handle.position.set(0.4, foundH + doorH / 2, D / 2 + 0.1);
-    shop.add(handle);
-
-    // Iron hinges
-    for (const hY of [foundH + 0.6, foundH + doorH - 0.3]) {
-      const hinge = new THREE.Mesh(
-        new THREE.BoxGeometry(0.5, 0.06, 0.02), metalMat,
-      );
-      hinge.position.set(-doorW / 2 + 0.2, hY, D / 2 + 0.08);
-      shop.add(hinge);
-    }
-
-    // ============================
-    // WINDOWS — leaded glass panes
-    // ============================
-    // Front windows (flanking the door)
-    for (const side of [-1, 1]) {
-      const winX = side * 2.4;
-      const winY = foundH + 2.0;
-      const winW = 1.2, winH = 1.0;
-
-      // Wooden frame
-      const frame = new THREE.Mesh(
-        new THREE.BoxGeometry(winW + 0.15, winH + 0.15, 0.12), plankMat,
-      );
-      frame.position.set(winX, winY, D / 2);
-      shop.add(frame);
-
-      // Glass pane
-      const glass = new THREE.Mesh(
-        new THREE.PlaneGeometry(winW - 0.05, winH - 0.05), glassMat,
-      );
-      glass.position.set(winX, winY, D / 2 + 0.04);
-      shop.add(glass);
-
-      // Lead dividers (cross pattern)
-      const vDiv = new THREE.Mesh(
-        new THREE.BoxGeometry(0.03, winH - 0.05, 0.02), leadMat,
-      );
-      vDiv.position.set(winX, winY, D / 2 + 0.06);
-      shop.add(vDiv);
-      const hDiv = new THREE.Mesh(
-        new THREE.BoxGeometry(winW - 0.05, 0.03, 0.02), leadMat,
-      );
-      hDiv.position.set(winX, winY, D / 2 + 0.06);
-      shop.add(hDiv);
-
-      // Windowsill
-      const sill = new THREE.Mesh(
-        new THREE.BoxGeometry(winW + 0.3, 0.06, 0.2), plankLightMat,
-      );
-      sill.position.set(winX, winY - winH / 2 - 0.05, D / 2 + 0.1);
-      shop.add(sill);
-    }
-
-    // Side window (right wall)
-    {
-      const winY = foundH + 2.0;
-      const winW = 1.4, winH = 1.1;
-
-      const frame = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, winH + 0.15, winW + 0.15), plankMat,
-      );
-      frame.position.set(W / 2, winY, 0);
-      shop.add(frame);
-
-      const glass = new THREE.Mesh(
-        new THREE.PlaneGeometry(winH - 0.05, winW - 0.05), glassMat,
-      );
-      glass.position.set(W / 2 + 0.04, winY, 0);
-      glass.rotation.y = Math.PI / 2;
-      shop.add(glass);
-
-      // Lead cross
-      const vDiv = new THREE.Mesh(
-        new THREE.BoxGeometry(0.02, winH - 0.05, 0.03), leadMat,
-      );
-      vDiv.position.set(W / 2 + 0.06, winY, 0);
-      shop.add(vDiv);
-      const hDiv = new THREE.Mesh(
-        new THREE.BoxGeometry(0.02, 0.03, winW - 0.05), leadMat,
-      );
-      hDiv.position.set(W / 2 + 0.06, winY, 0);
-      shop.add(hDiv);
-
-      const sill = new THREE.Mesh(
-        new THREE.BoxGeometry(0.2, 0.06, winW + 0.3), plankLightMat,
-      );
-      sill.position.set(W / 2 + 0.1, winY - winH / 2 - 0.05, 0);
-      shop.add(sill);
-    }
-
-    // ============================
-    // ROOF — steep gabled plank roof
-    // ============================
-    const roofOverhang = 0.8;
-    const roofPeakH = 2.5;
-    const roofBaseY = foundH + wallH;
-
-    // Roof planes (two sides of the gable)
-    for (const side of [-1, 1]) {
-      const roofW = Math.sqrt((W / 2 + roofOverhang) ** 2 + roofPeakH ** 2);
-      const roofAngle = Math.atan2(roofPeakH, W / 2 + roofOverhang);
-      const roofGeo = new THREE.PlaneGeometry(D + roofOverhang * 2, roofW, 1, 1);
-      const roof = new THREE.Mesh(roofGeo, roofMat);
-      roof.position.set(
-        side * (W / 4 + roofOverhang / 2) * Math.cos(roofAngle),
-        roofBaseY + roofPeakH / 2 + side * 0.01,
-        0,
-      );
-      roof.rotation.z = side * (Math.PI / 2 - roofAngle);
-      roof.rotation.y = Math.PI / 2;
-      roof.castShadow = true;
-      roof.receiveShadow = true;
-      shop.add(roof);
-    }
-
-    // Ridge beam along the top
-    const ridge = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, D + roofOverhang * 2, 6), roofEdgeMat,
-    );
-    ridge.rotation.x = Math.PI / 2;
-    ridge.position.set(0, roofBaseY + roofPeakH, 0);
-    shop.add(ridge);
-
-    // Gable triangles (front and back)
-    for (const fz of [D / 2, -D / 2]) {
-      const gableShape = new THREE.Shape();
-      gableShape.moveTo(-W / 2 - 0.1, 0);
-      gableShape.lineTo(0, roofPeakH);
-      gableShape.lineTo(W / 2 + 0.1, 0);
-      gableShape.lineTo(-W / 2 - 0.1, 0);
-      const gableGeo = new THREE.ShapeGeometry(gableShape);
-      const gable = new THREE.Mesh(gableGeo, plankMat);
-      gable.position.set(0, roofBaseY, fz + (fz > 0 ? 0.02 : -0.02));
-      if (fz < 0) gable.rotation.y = Math.PI;
-      gable.castShadow = true;
-      shop.add(gable);
-    }
-
-    // Fascia boards along roof edges
-    for (const side of [-1, 1]) {
-      const fasciaLen = Math.sqrt((W / 2 + roofOverhang) ** 2 + roofPeakH ** 2);
-      const fasciaAngle = Math.atan2(roofPeakH, W / 2 + roofOverhang);
-      for (const fz of [D / 2 + roofOverhang, -(D / 2 + roofOverhang)]) {
-        const fascia = new THREE.Mesh(
-          new THREE.BoxGeometry(fasciaLen, 0.12, 0.06), roofEdgeMat,
+    for (const px of [-W / 2 + 0.1, W / 2 - 0.1]) {
+      for (const pz of [-D / 2 + 0.1, D / 2 - 0.1]) {
+        const post = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.06, 0.07, postH, 6), darkWood,
         );
-        fascia.position.set(
-          side * (W / 4 + roofOverhang / 4),
-          roofBaseY + roofPeakH / 2,
-          fz,
-        );
-        fascia.rotation.z = side * (Math.PI / 2 - fasciaAngle);
-        shop.add(fascia);
+        post.position.set(px, postH / 2, pz);
+        post.castShadow = true;
+        stall.add(post);
       }
     }
 
-    // ============================
-    // INTERIOR FLOOR — plank floor visible through door
-    // ============================
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(W - 0.4, D - 0.4), plankLightMat,
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, foundH + 0.02, 0);
-    floor.receiveShadow = true;
-    shop.add(floor);
-
-    // ============================
-    // FRONT COUNTER (outside, in front of door)
-    // ============================
-    const counterW = 4;
-    const counterH = 1.1;
-    const counterD = 0.8;
-    const counterZ = D / 2 + 1.2;
-
-    // Counter top
-    const counterTop = new THREE.Mesh(
-      new THREE.BoxGeometry(counterW, 0.1, counterD), plankLightMat,
-    );
-    counterTop.position.set(0, counterH, counterZ);
-    counterTop.castShadow = true;
-    shop.add(counterTop);
-
-    // Counter front board
-    const counterFront = new THREE.Mesh(
-      new THREE.BoxGeometry(counterW, counterH - 0.1, 0.08), plankMat,
-    );
-    counterFront.position.set(0, (counterH - 0.1) / 2 + 0.05, counterZ + counterD / 2);
-    shop.add(counterFront);
-
-    // Counter legs
-    for (const lx of [-counterW / 2 + 0.15, counterW / 2 - 0.15]) {
-      const leg = new THREE.Mesh(
-        new THREE.BoxGeometry(0.1, counterH - 0.1, 0.1), plankMat,
+    // Cross beams at top
+    for (const px of [-W / 2 + 0.1, W / 2 - 0.1]) {
+      const beam = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.08, D + 0.4), darkWood,
       );
-      leg.position.set(lx, (counterH - 0.1) / 2 + 0.05, counterZ);
-      shop.add(leg);
+      beam.position.set(px, postH - 0.04, 0);
+      beam.castShadow = true;
+      stall.add(beam);
+    }
+    for (const pz of [-D / 2 + 0.1, D / 2 + 0.1]) {
+      const beam = new THREE.Mesh(
+        new THREE.BoxGeometry(W + 0.4, 0.08, 0.08), darkWood,
+      );
+      beam.position.set(0, postH - 0.04, pz);
+      beam.castShadow = true;
+      stall.add(beam);
+    }
+
+    // Canvas sheet with slight sag
+    const canopyY = postH + 0.02;
+    const canopyOverhang = 0.5;
+    const canopyGeo = new THREE.PlaneGeometry(W + canopyOverhang * 2, D + canopyOverhang * 2, 4, 4);
+    const posAttr = canopyGeo.attributes.position;
+    for (let i = 0; i < posAttr.count; i++) {
+      const x = posAttr.getX(i);
+      const y = posAttr.getY(i);
+      const dist = Math.sqrt(x * x + y * y);
+      posAttr.setZ(i, -dist * 0.04);
+    }
+    canopyGeo.computeVertexNormals();
+    const canopyMesh = new THREE.Mesh(canopyGeo, canvasMat);
+    canopyMesh.rotation.x = -Math.PI / 2;
+    canopyMesh.position.set(0, canopyY, 0);
+    canopyMesh.castShadow = true;
+    canopyMesh.receiveShadow = true;
+    stall.add(canopyMesh);
+
+    // Decorative stripes on canvas
+    for (const sz of [-0.7, 0.7]) {
+      const stripe = new THREE.Mesh(
+        new THREE.PlaneGeometry(W + canopyOverhang * 2, 0.5), canvasStripe,
+      );
+      stripe.rotation.x = -Math.PI / 2;
+      stripe.position.set(0, canopyY + 0.01, sz);
+      stall.add(stripe);
+    }
+
+    // Front valance (hanging trim)
+    const valance = new THREE.Mesh(
+      new THREE.PlaneGeometry(W + canopyOverhang * 2, 0.3), canvasStripe,
+    );
+    valance.position.set(0, canopyY - 0.15, D / 2 + canopyOverhang);
+    stall.add(valance);
+
+    // Scalloped trim pieces
+    for (let i = 0; i < 8; i++) {
+      const tri = new THREE.Mesh(
+        new THREE.ConeGeometry(0.12, 0.2, 3), canvasMat,
+      );
+      tri.rotation.z = Math.PI;
+      tri.position.set(-W / 2 - canopyOverhang + 0.45 + i * 0.8, canopyY - 0.4, D / 2 + canopyOverhang);
+      stall.add(tri);
     }
 
     // ============================
     // MERCHANDISE on counter
     // ============================
-    const potionColors = [0xff3333, 0x3366ff, 0x33dd33, 0xffaa00, 0xdd33dd];
-    for (let i = 0; i < 5; i++) {
-      // Bottle body
+    const potionColors = [0xff3333, 0x3366ff, 0x33dd33];
+    for (let i = 0; i < 3; i++) {
       const bottle = new THREE.Mesh(
         new THREE.CylinderGeometry(0.05, 0.07, 0.2, 8),
         new THREE.MeshPhysicalMaterial({
@@ -1029,116 +870,119 @@ export class HubWorld {
           thickness: 0.5, transparent: true, opacity: 0.75,
         }),
       );
-      bottle.position.set(-1.6 + i * 0.8, counterH + 0.15, counterZ);
-      shop.add(bottle);
-
-      // Bottle neck
-      const neck = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.025, 0.04, 0.06, 6),
-        new THREE.MeshPhysicalMaterial({
-          color: potionColors[i], transmission: 0.5, roughness: 0.05,
-          transparent: true, opacity: 0.7,
-        }),
-      );
-      neck.position.set(-1.6 + i * 0.8, counterH + 0.28, counterZ);
-      shop.add(neck);
+      bottle.position.set(-1.5 + i * 0.5, counterH + 0.15, -0.4);
+      stall.add(bottle);
 
       const cork = new THREE.Mesh(
         new THREE.CylinderGeometry(0.02, 0.03, 0.04, 4),
         new THREE.MeshStandardMaterial({ color: 0xaa8855, roughness: 0.85 }),
       );
-      cork.position.set(-1.6 + i * 0.8, counterH + 0.33, counterZ);
-      shop.add(cork);
+      cork.position.set(-1.5 + i * 0.5, counterH + 0.28, -0.4);
+      stall.add(cork);
     }
 
-    // ============================
-    // BARRELS & CRATES outside
-    // ============================
-    const barrelPositions: number[][] = [[-3.0, D / 2 + 0.5], [3.0, D / 2 + 0.8], [-3.2, D / 2 + 1.8]];
-    for (const [bx, bz] of barrelPositions) {
-      const barrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.42, 0.38, 0.9, 10), plankMat,
-      );
-      barrel.position.set(bx, 0.45, bz);
-      barrel.castShadow = true;
-      shop.add(barrel);
+    // Sword display (leaning)
+    const swordBlade = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.9, 0.02),
+      new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8, roughness: 0.2 }),
+    );
+    swordBlade.position.set(1.5, counterH + 0.5, 0);
+    swordBlade.rotation.z = 0.15;
+    stall.add(swordBlade);
 
-      for (const ry of [0.15, 0.45, 0.75]) {
+    const swordHilt = new THREE.Mesh(
+      new THREE.BoxGeometry(0.2, 0.04, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x4a3520, roughness: 0.8 }),
+    );
+    swordHilt.position.set(1.45, counterH + 0.08, 0);
+    stall.add(swordHilt);
+
+    // Leather armor on display
+    const armorDummy = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.2, 0.25, 0.5, 8),
+      new THREE.MeshStandardMaterial({ color: 0x7a5530, roughness: 0.9 }),
+    );
+    armorDummy.position.set(0.3, counterH + 0.3, 0.2);
+    stall.add(armorDummy);
+
+    // Small crate on counter
+    const smallCrate = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 0.3, 0.35), plank,
+    );
+    smallCrate.position.set(-0.7, counterH + 0.2, 0.3);
+    smallCrate.rotation.y = 0.2;
+    stall.add(smallCrate);
+
+    // ============================
+    // BARRELS beside stall
+    // ============================
+    for (const [bx, bz] of [[-2.8, 0.3], [2.8, -0.2]] as number[][]) {
+      const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.4, 0.36, 0.85, 10), plank,
+      );
+      barrel.position.set(bx, 0.42, bz);
+      barrel.castShadow = true;
+      stall.add(barrel);
+
+      for (const ry of [0.12, 0.42, 0.72]) {
         const hoop = new THREE.Mesh(
-          new THREE.TorusGeometry(0.41, 0.015, 6, 12), metalMat,
+          new THREE.TorusGeometry(0.39, 0.012, 6, 12), metalMat,
         );
         hoop.position.set(bx, ry, bz);
         hoop.rotation.x = Math.PI / 2;
-        shop.add(hoop);
+        stall.add(hoop);
       }
     }
 
-    const crateData: number[][] = [[3.2, 0.3, D / 2 + 1.6, 0.6], [3.5, 0.85, D / 2 + 1.4, 0.45]];
-    for (const [cx, cy, cz, s] of crateData) {
-      const crate = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), plankMat);
-      crate.position.set(cx, cy, cz);
-      crate.rotation.y = Math.random() * 0.4;
-      crate.castShadow = true;
-      shop.add(crate);
-    }
-
     // ============================
-    // HANGING SIGN — "GERNAL'S SHOP"
+    // HANGING SIGN — "TOIVO'S FORGE"
     // ============================
-    // Wooden bracket arm
     const signArm = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.03, 1.5, 5), metalMat,
+      new THREE.CylinderGeometry(0.02, 0.02, 1.2, 5), metalMat,
     );
     signArm.rotation.z = Math.PI / 2;
-    signArm.position.set(0.75, roofBaseY - 0.3, D / 2 + 0.15);
-    shop.add(signArm);
+    signArm.position.set(0.6, postH - 0.5, D / 2 + canopyOverhang + 0.1);
+    stall.add(signArm);
 
-    // Sign board
     const signBoard = new THREE.Mesh(
-      new THREE.BoxGeometry(2.0, 0.7, 0.06), plankMat,
+      new THREE.BoxGeometry(1.6, 0.55, 0.05), plank,
     );
-    signBoard.position.set(0.75, roofBaseY - 0.8, D / 2 + 0.15);
-    shop.add(signBoard);
+    signBoard.position.set(0.6, postH - 0.95, D / 2 + canopyOverhang + 0.1);
+    stall.add(signBoard);
 
-    const signText = this.createTextSign("GERNAL'S SHOP", 0xFFD700);
-    signText.position.set(0.75, roofBaseY - 0.8, D / 2 + 0.22);
-    shop.add(signText);
+    const signText = this.createTextSign("TOIVO'S FORGE", 0xFFD700);
+    signText.position.set(0.6, postH - 0.95, D / 2 + canopyOverhang + 0.16);
+    stall.add(signText);
 
-    // Sign chains
     for (const sx of [-0.3, 0.3]) {
       const chain = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.008, 0.008, 0.35, 4), metalMat,
+        new THREE.CylinderGeometry(0.006, 0.006, 0.32, 4), metalMat,
       );
-      chain.position.set(0.75 + sx, roofBaseY - 0.55, D / 2 + 0.15);
-      shop.add(chain);
+      chain.position.set(0.6 + sx, postH - 0.68, D / 2 + canopyOverhang + 0.1);
+      stall.add(chain);
     }
 
     // ============================
-    // CHIMNEY
+    // LANTERN hanging from canopy
     // ============================
-    const chimney = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 1.5, 0.7), stoneMat,
+    const lanternHook = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.008, 0.008, 0.4, 4), metalMat,
     );
-    chimney.position.set(-W / 2 + 0.8, roofBaseY + roofPeakH - 0.2, -D / 2 + 0.8);
-    chimney.castShadow = true;
-    shop.add(chimney);
+    lanternHook.position.set(0, canopyY - 0.2, 0);
+    stall.add(lanternHook);
 
-    // Chimney cap
-    const cap = new THREE.Mesh(
-      new THREE.BoxGeometry(0.9, 0.1, 0.9), stoneMat,
+    const lanternFrame = new THREE.Mesh(
+      new THREE.BoxGeometry(0.2, 0.25, 0.2), metalMat,
     );
-    cap.position.set(-W / 2 + 0.8, roofBaseY + roofPeakH + 0.55, -D / 2 + 0.8);
-    shop.add(cap);
+    lanternFrame.position.set(0, canopyY - 0.5, 0);
+    stall.add(lanternFrame);
 
-    // ============================
-    // WARM INTERIOR GLOW (visible through windows/door)
-    // ============================
-    const interiorLight = new THREE.PointLight(0xffaa55, 1.0, 8);
-    interiorLight.position.set(0, foundH + 2.5, 0);
-    shop.add(interiorLight);
+    const lanternLight = new THREE.PointLight(0xffaa44, 0.8, 7);
+    lanternLight.position.set(0, canopyY - 0.5, 0);
+    stall.add(lanternLight);
 
-    shop.position.copy(pos);
-    this.group.add(shop);
+    stall.position.copy(pos);
+    this.group.add(stall);
   }
 
   private buildPvPArena() {
@@ -1199,387 +1043,848 @@ export class HubWorld {
 
   private buildCaveEntrance() {
     const cp = this.cavePosition.clone();
-    const boneMat = new THREE.MeshStandardMaterial({ color: 0xd4c8a0, roughness: 0.75, metalness: 0.05 });
-    const boneMatDark = new THREE.MeshStandardMaterial({ color: 0xb0a480, roughness: 0.8, metalness: 0.05 });
 
-    // ── a) Dragon skull — the entrance itself ─────────────────────────
-    // Upper jaw / cranium — big elongated dome facing the player
-    const craniGeo = new THREE.SphereGeometry(3.2, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.6);
+    // ── a) Dragon skull — resting ON the ground, open mouth = portal ───
+    // Skull is lying flat: lower jaw at y≈0, cranium rises to y≈3-4
+    // Mouth faces +Z (toward player), player walks INTO the open mouth
+
+    const boneMat = new THREE.MeshStandardMaterial({
+      color: 0xd4c9a8,
+      roughness: 0.85,
+      metalness: 0.05,
+    });
+
+    const recessMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1210,
+      roughness: 0.95,
+      metalness: 0,
+    });
+
+    // Cranium — large angular skull, lifted higher for gaping mouth underneath
+    const craniGeo = new THREE.BoxGeometry(6.0, 3.5, 8.0, 8, 6, 8);
+    const craniPos = craniGeo.attributes.position;
+    for (let i = 0; i < craniPos.count; i++) {
+      let x = craniPos.getX(i), y = craniPos.getY(i), z = craniPos.getZ(i);
+      // V-shaped snout taper toward front (+Z)
+      if (z > 0) {
+        const taper = 1 - (z / 4.0) * 0.45;
+        x *= taper;
+        y *= (taper * 0.8 + 0.2);
+      }
+      // Angular brow ridge — more pronounced
+      if (y > 0.3 && z > -1) y += 0.7 * Math.max(0, 1 - Math.abs(x) / 2.8);
+      // Occipital bulge at back
+      if (z < -2) y += Math.max(0, (-z - 2) / 1.5) * 0.4;
+      // Flatten bottom — this is the roof of the mouth
+      if (y < -0.8) y = -0.8;
+      // Cheek flare
+      if (y < 0 && Math.abs(x) > 1.5) x *= 1.2;
+      craniPos.setX(i, x);
+      craniPos.setY(i, y);
+    }
+    craniPos.needsUpdate = true;
+    craniGeo.computeVertexNormals();
+    displaceBone(craniGeo, 0.06, 101);
+    applyBoneWeathering(craniGeo, { seed: 101, mossAmount: 0.15, crackDarkness: 0.22 });
     const cranium = new THREE.Mesh(craniGeo, boneMat);
-    cranium.position.set(cp.x, 5.5, cp.z - 1.5);
-    cranium.scale.set(1, 0.7, 1.8); // elongated snout shape
+    cranium.position.set(cp.x, 3.5, cp.z);
     cranium.castShadow = true;
     this.group.add(cranium);
 
-    // Snout ridge (brow)
-    const browGeo = new THREE.BoxGeometry(4, 0.5, 4, 4, 2, 4);
-    const browAtt = browGeo.attributes.position;
-    for (let i = 0; i < browAtt.count; i++) {
-      browAtt.setX(i, browAtt.getX(i) + (Math.random() - 0.5) * 0.15);
-      browAtt.setY(i, browAtt.getY(i) + (Math.random() - 0.5) * 0.1);
+    // Sagittal crest — sharp ridge along skull top
+    const crestGeo = new THREE.BoxGeometry(0.3, 1.0, 6.0, 3, 3, 8);
+    const crestP = crestGeo.attributes.position;
+    for (let v = 0; v < crestP.count; v++) {
+      const y = crestP.getY(v), z = crestP.getZ(v);
+      if (z > 0) crestP.setY(v, y * (1 - z / 6.0 * 0.5));
     }
-    browAtt.needsUpdate = true;
-    browGeo.computeVertexNormals();
-    const brow = new THREE.Mesh(browGeo, boneMatDark);
-    brow.position.set(cp.x, 5.8, cp.z - 0.5);
-    brow.castShadow = true;
-    this.group.add(brow);
+    crestP.needsUpdate = true;
+    crestGeo.computeVertexNormals();
+    displaceBone(crestGeo, 0.06, 102);
+    applyBoneWeathering(crestGeo, { seed: 102, bleachAmount: 0.14 });
+    const crest = new THREE.Mesh(crestGeo, boneMat);
+    crest.position.set(cp.x, 5.5, cp.z - 1.0);
+    crest.castShadow = true;
+    this.group.add(crest);
 
-    // Lower jaw — forms the ground-level threshold
-    const jawGeo = new THREE.BoxGeometry(4.5, 0.6, 4, 5, 2, 4);
-    const jawAtt = jawGeo.attributes.position;
-    for (let i = 0; i < jawAtt.count; i++) {
-      jawAtt.setX(i, jawAtt.getX(i) + (Math.random() - 0.5) * 0.1);
-      jawAtt.setZ(i, jawAtt.getZ(i) + (Math.random() - 0.5) * 0.1);
-    }
-    jawAtt.needsUpdate = true;
-    jawGeo.computeVertexNormals();
-    const jaw = new THREE.Mesh(jawGeo, boneMatDark);
-    jaw.position.set(cp.x, 0.3, cp.z - 0.5);
-    jaw.castShadow = true;
-    this.group.add(jaw);
-
-    // Teeth — upper fangs hanging down
-    for (let i = 0; i < 8; i++) {
-      const side = (i % 2 === 0 ? -1 : 1);
-      const toothX = cp.x + side * (1.6 + (i % 4) * 0.15);
-      const toothH = 0.4 + Math.random() * 0.6;
-      const isFang = i < 2; // first two are big fangs
-      const fangH = isFang ? 1.2 : toothH;
-      const tooth = new THREE.Mesh(
-        new THREE.ConeGeometry(isFang ? 0.15 : 0.08, fangH, 5),
-        boneMat,
-      );
-      tooth.position.set(toothX, 4.2 - fangH / 2 + (i % 4) * 0.12, cp.z + 0.8 - (i % 4) * 0.4);
-      tooth.rotation.z = Math.PI; // point downward
-      tooth.castShadow = true;
-      this.group.add(tooth);
+    // Skull spikes — horn-like protrusions along skull edges
+    for (let i = 0; i < 4; i++) {
+      for (const side of [-1, 1]) {
+        const spkH = 0.6 - i * 0.08;
+        const spkGeo = new THREE.ConeGeometry(0.1, spkH, 4);
+        displaceBone(spkGeo, 0.015, 180 + i * 2 + (side > 0 ? 1 : 0));
+        applyBoneWeathering(spkGeo, { seed: 180 + i * 2 + (side > 0 ? 1 : 0) });
+        const spk = new THREE.Mesh(spkGeo, boneMat);
+        spk.position.set(
+          cp.x + side * (2.5 - i * 0.15),
+          4.8 - i * 0.2,
+          cp.z + 1.0 - i * 1.2,
+        );
+        spk.rotation.z = side * 0.5;
+        spk.rotation.x = -0.15;
+        spk.castShadow = true;
+        this.group.add(spk);
+      }
     }
 
-    // Teeth — lower fangs pointing up
-    for (let i = 0; i < 6; i++) {
-      const side = (i % 2 === 0 ? -1 : 1);
-      const toothX = cp.x + side * (1.5 + (i % 3) * 0.2);
-      const toothH = 0.3 + Math.random() * 0.4;
-      const tooth = new THREE.Mesh(
-        new THREE.ConeGeometry(0.07, toothH, 5),
-        boneMat,
-      );
-      tooth.position.set(toothX, 0.6 + toothH / 2, cp.z + 0.6 - (i % 3) * 0.5);
-      tooth.castShadow = true;
-      this.group.add(tooth);
+    // Upper jaw — forms roof of the open mouth portal (wide gaping opening)
+    const jawUpperGeo = new THREE.BoxGeometry(5.5, 1.0, 6.0, 7, 3, 7);
+    const jawUPos = jawUpperGeo.attributes.position;
+    for (let i = 0; i < jawUPos.count; i++) {
+      const z = jawUPos.getZ(i);
+      if (z > 0) jawUPos.setX(i, jawUPos.getX(i) * (1 - (z / 3.0) * 0.45));
     }
+    jawUPos.needsUpdate = true;
+    jawUpperGeo.computeVertexNormals();
+    displaceBone(jawUpperGeo, 0.04, 103);
+    applyBoneWeathering(jawUpperGeo, { seed: 103, crackDarkness: 0.18 });
+    const jawUpper = new THREE.Mesh(jawUpperGeo, boneMat);
+    jawUpper.position.set(cp.x, 2.8, cp.z + 2.5);
+    jawUpper.castShadow = true;
+    this.group.add(jawUpper);
 
-    // Eye sockets — dark hollow spheres
+    // Lower jaw — two massive mandible halves flat on ground, spread wide open
     for (const side of [-1, 1]) {
-      // Socket cavity
-      const socketGeo = new THREE.SphereGeometry(0.55, 8, 8);
-      const socket = new THREE.Mesh(socketGeo, new THREE.MeshBasicMaterial({ color: 0x050505 }));
-      socket.position.set(cp.x + side * 1.2, 5.6, cp.z + 1);
-      socket.scale.set(1, 0.8, 0.6);
+      const mandGeo = new THREE.BoxGeometry(2.5, 0.5, 6.0, 5, 2, 6);
+      const mandPos = mandGeo.attributes.position;
+      for (let i = 0; i < mandPos.count; i++) {
+        const z = mandPos.getZ(i);
+        if (z > 0) mandPos.setX(i, mandPos.getX(i) * (1 - (z / 3.0) * 0.45));
+      }
+      mandPos.needsUpdate = true;
+      mandGeo.computeVertexNormals();
+      displaceBone(mandGeo, 0.03, 104 + side);
+      applyBoneWeathering(mandGeo, { seed: 104 + side, crackDarkness: 0.22 });
+      const mandible = new THREE.Mesh(mandGeo, boneMat);
+      mandible.position.set(cp.x + side * 1.6, 0.2, cp.z + 2.5);
+      mandible.rotation.z = side * 0.08;
+      mandible.rotation.y = side * 0.12;
+      mandible.castShadow = true;
+      this.group.add(mandible);
+    }
+
+    // Nasal openings — dark cavities on top of snout
+    for (const side of [-1, 1]) {
+      const nasalShape = new THREE.Shape();
+      nasalShape.moveTo(0, 0);
+      nasalShape.bezierCurveTo(0.3, 0.4 * side, 0.6, 0.35, 0.5, 0);
+      nasalShape.bezierCurveTo(0.4, -0.25, 0.1, -0.25, 0, 0);
+      const nasalGeo = new THREE.ShapeGeometry(nasalShape);
+      const nasal = new THREE.Mesh(nasalGeo, recessMat);
+      nasal.position.set(cp.x + side * 0.5, 4.2, cp.z + 4.0);
+      nasal.scale.set(0.8, 0.7, 1);
+      this.group.add(nasal);
+    }
+
+    // Orbital ridges — brow bones above eye sockets
+    for (const side of [-1, 1]) {
+      const browCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(side * 0.5, 0, 0),
+        new THREE.Vector3(side * 1.0, 0.3, 0.2),
+        new THREE.Vector3(side * 1.5, 0.15, 0),
+        new THREE.Vector3(side * 1.8, -0.1, -0.2),
+      ]);
+      const browGeo = new THREE.TubeGeometry(browCurve, 8, 0.2, 6, false);
+      displaceBone(browGeo, 0.03, 110 + side);
+      applyBoneWeathering(browGeo, { seed: 110 + side, bleachAmount: 0.1 });
+      const browBone = new THREE.Mesh(browGeo, boneMat);
+      browBone.position.set(cp.x, 4.5, cp.z + 1.5);
+      browBone.castShadow = true;
+      this.group.add(browBone);
+    }
+
+    // Cheekbones — zygomatic arches
+    for (const side of [-1, 1]) {
+      const zygCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(side * 0.8, -0.3, 0.5),
+        new THREE.Vector3(side * 1.2, -0.8, 0.3),
+      ]);
+      const zygGeo = new THREE.TubeGeometry(zygCurve, 6, 0.14, 5, false);
+      displaceBone(zygGeo, 0.025, 115 + side);
+      applyBoneWeathering(zygGeo, { seed: 115 + side });
+      const zygomatic = new THREE.Mesh(zygGeo, boneMat);
+      zygomatic.position.set(cp.x + side * 0.8, 3.6, cp.z + 1.0);
+      zygomatic.castShadow = true;
+      this.group.add(zygomatic);
+    }
+
+    // Teeth — upper jaw: 20 teeth hanging DOWN from raised jaw, big fangs at front
+    for (let i = 0; i < 20; i++) {
+      const side = (i % 2 === 0) ? -1 : 1;
+      const idx = Math.floor(i / 2);
+      const isFang = idx < 3;
+      const isBroken = idx === 5 || idx === 8;
+      const baseH = isFang ? (1.5 - idx * 0.15) : (0.5 + Math.sin(i * 2.3) * 0.15);
+      const h = isBroken ? baseH * 0.4 : baseH;
+      const r = isFang ? 0.14 : Math.max(0.04, 0.09 - idx * 0.005);
+      const toothGeo = new THREE.ConeGeometry(r, h, 5);
+      const tPos = toothGeo.attributes.position;
+      for (let v = 0; v < tPos.count; v++) {
+        const y = tPos.getY(v);
+        // Slight backward curve to teeth
+        if (y < 0) tPos.setZ(v, tPos.getZ(v) + y * 0.15);
+      }
+      tPos.needsUpdate = true;
+      toothGeo.computeVertexNormals();
+      displaceBone(toothGeo, 0.012, 120 + i);
+      applyBoneWeathering(toothGeo, { seed: 120 + i, baseColor: [0.88, 0.84, 0.68] });
+      const tooth = new THREE.Mesh(toothGeo, boneMat);
+      // Teeth hang from upper jaw (y≈2.3) along the jaw edge, wider spread
+      tooth.position.set(
+        cp.x + side * (1.8 + idx * 0.2),
+        2.3 - h / 2 + idx * 0.02,
+        cp.z + 4.0 - idx * 0.45,
+      );
+      tooth.rotation.z = Math.PI; // Point downward
+      tooth.rotation.x = Math.sin(i * 3.7) * 0.12;
+      tooth.rotation.y = Math.sin(i * 2.1) * 0.1;
+      tooth.castShadow = true;
+      this.group.add(tooth);
+    }
+
+    // Teeth — lower jaw: 14 teeth poking UP from mandibles on ground
+    for (let i = 0; i < 14; i++) {
+      const side = (i % 2 === 0) ? -1 : 1;
+      const idx = Math.floor(i / 2);
+      const isFang = idx < 2;
+      const isBroken = idx === 3;
+      const baseH = isFang ? (1.2 - idx * 0.2) : (0.4 + Math.sin(i * 1.8) * 0.12);
+      const h = isBroken ? baseH * 0.35 : baseH;
+      const r = isFang ? 0.11 : Math.max(0.04, 0.07 - idx * 0.004);
+      const toothGeo = new THREE.ConeGeometry(r, h, 5);
+      const tPos = toothGeo.attributes.position;
+      for (let v = 0; v < tPos.count; v++) {
+        const y = tPos.getY(v);
+        if (y > 0) tPos.setZ(v, tPos.getZ(v) - y * 0.1);
+      }
+      tPos.needsUpdate = true;
+      toothGeo.computeVertexNormals();
+      displaceBone(toothGeo, 0.01, 140 + i);
+      applyBoneWeathering(toothGeo, { seed: 140 + i, baseColor: [0.85, 0.80, 0.62] });
+      const tooth = new THREE.Mesh(toothGeo, boneMat);
+      // Teeth point UP from lower jaw, wider spread matching mandibles
+      tooth.position.set(
+        cp.x + side * (1.4 + idx * 0.22),
+        0.4 + h / 2,
+        cp.z + 4.0 - idx * 0.5,
+      );
+      tooth.rotation.x = Math.sin(i * 2.5) * 0.08;
+      tooth.rotation.y = side * Math.sin(i * 1.7) * 0.06;
+      tooth.castShadow = true;
+      this.group.add(tooth);
+    }
+
+    // Eye sockets + glow (naming preserved for animations)
+    for (const side of [-1, 1]) {
+      const socketGeo = new THREE.SphereGeometry(0.55, 10, 10);
+      displaceBone(socketGeo, 0.03, 150 + side);
+      const socket = new THREE.Mesh(socketGeo, recessMat);
+      socket.position.set(cp.x + side * 1.5, 4.0, cp.z + 1.6);
+      socket.scale.set(1.2, 0.9, 0.7);
       this.group.add(socket);
 
-      // Ghostly eye glow
-      const eyeGlow = new THREE.PointLight(0x22ff44, 1.0, 5);
-      eyeGlow.position.set(cp.x + side * 1.2, 5.6, cp.z + 1.2);
+      const eyeGlow = new THREE.PointLight(0x22ff44, 1.5, 6);
+      eyeGlow.position.set(cp.x + side * 1.5, 4.0, cp.z + 1.8);
       eyeGlow.name = `dragon-eye-${side === -1 ? 'L' : 'R'}`;
       this.group.add(eyeGlow);
 
-      // Tiny glowing orb inside socket
       const eyeOrb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.15, 6, 6),
+        new THREE.SphereGeometry(0.2, 6, 6),
         new THREE.MeshBasicMaterial({ color: 0x22ff44, transparent: true, opacity: 0.7 }),
       );
-      eyeOrb.position.set(cp.x + side * 1.2, 5.6, cp.z + 1.05);
+      eyeOrb.position.set(cp.x + side * 1.5, 4.0, cp.z + 1.65);
       eyeOrb.name = `dragon-eye-orb-${side === -1 ? 'L' : 'R'}`;
       this.group.add(eyeOrb);
     }
 
-    // Horns — two large curved horns sweeping back
+    // Horns — sweep backward from skull, close to ground
     for (const side of [-1, 1]) {
-      const hornSegs = 6;
-      for (let s = 0; s < hornSegs; s++) {
-        const t = s / hornSegs;
-        const segLen = 1.0 - t * 0.3;
-        const segRadius = 0.25 - t * 0.18;
-        const segGeo = new THREE.CylinderGeometry(segRadius * 0.7, segRadius, segLen, 6);
-        const seg = new THREE.Mesh(segGeo, boneMatDark);
-        // Curve outward and backward
-        const hx = cp.x + side * (1.8 + t * 2.5);
-        const hy = 6.5 + t * 2.0 - t * t * 1.5;
-        const hz = cp.z + 0.5 - t * 2.5;
-        seg.position.set(hx, hy, hz);
-        seg.rotation.z = side * (0.3 + t * 0.5);
-        seg.rotation.x = -0.3 - t * 0.2;
-        seg.castShadow = true;
-        this.group.add(seg);
+      const hornCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(cp.x + side * 2.2, 4.5, cp.z + 0.5),
+        new THREE.Vector3(cp.x + side * 3.2, 5.2, cp.z - 0.5),
+        new THREE.Vector3(cp.x + side * 4.0, 4.8, cp.z - 2.0),
+        new THREE.Vector3(cp.x + side * 4.2, 3.5, cp.z - 3.5),
+      ]);
+      const hornGeo = new THREE.TubeGeometry(hornCurve, 12, 0.22, 7, false);
+      const hPos = hornGeo.attributes.position;
+      for (let v = 0; v < hPos.count; v++) {
+        const p = new THREE.Vector3(hPos.getX(v), hPos.getY(v), hPos.getZ(v));
+        const startD = p.distanceTo(hornCurve.getPoint(0));
+        const endD = p.distanceTo(hornCurve.getPoint(1));
+        const t = startD / (startD + endD + 0.001);
+        const taper = 1 - t * 0.7;
+        const center = hornCurve.getPoint(t);
+        hPos.setX(v, center.x + (hPos.getX(v) - center.x) * taper);
+        hPos.setY(v, center.y + (hPos.getY(v) - center.y) * taper);
+        hPos.setZ(v, center.z + (hPos.getZ(v) - center.z) * taper);
       }
+      hPos.needsUpdate = true;
+      hornGeo.computeVertexNormals();
+      displaceBone(hornGeo, 0.04, 160 + side);
+      applyBoneWeathering(hornGeo, { seed: 160 + side, baseColor: [0.75, 0.70, 0.55] });
+      const horn = new THREE.Mesh(hornGeo, boneMat);
+      horn.castShadow = true;
+      this.group.add(horn);
     }
 
-    // Dark interior (the maw)
-    const interiorGeo = new THREE.PlaneGeometry(3.5, 4);
-    const interior = new THREE.Mesh(interiorGeo, new THREE.MeshBasicMaterial({ color: 0x020304 }));
-    interior.position.set(cp.x, 2.3, cp.z - 1);
+    // Dark interior (the maw) — large dark void visible through the gaping open mouth
+    // This is the portal the player walks into
+    const interiorGeo = new THREE.PlaneGeometry(5.0, 3.5);
+    const interior = new THREE.Mesh(interiorGeo, new THREE.MeshBasicMaterial({
+      color: 0x010203, side: THREE.DoubleSide,
+    }));
+    interior.position.set(cp.x, 1.5, cp.z - 0.5);
     this.group.add(interior);
 
-    // ── b) Spine — vertebrae trailing behind the skull ────────────────
-    const spineCount = 14;
-    for (let i = 0; i < spineCount; i++) {
-      const t = i / spineCount;
-      const vSize = 0.5 - t * 0.2;
-      const vertGeo = new THREE.DodecahedronGeometry(vSize, 0);
-      const vert = new THREE.Mesh(vertGeo, boneMat);
-      vert.position.set(
-        cp.x + Math.sin(i * 0.3) * 0.3,
-        4.5 - t * 3.5 + Math.sin(i * 0.5) * 0.3,
-        cp.z - 2.5 - i * 1.2,
-      );
-      vert.rotation.set(Math.random() * 0.3, 0, Math.random() * 0.2);
-      vert.castShadow = true;
-      this.group.add(vert);
+    // Additional dark planes for depth/tunnel effect inside mouth
+    const innerMawGeo = new THREE.PlaneGeometry(4.5, 3.2);
+    const innerMaw = new THREE.Mesh(innerMawGeo, new THREE.MeshBasicMaterial({
+      color: 0x010102, side: THREE.DoubleSide,
+    }));
+    innerMaw.position.set(cp.x, 1.4, cp.z - 2.5);
+    this.group.add(innerMaw);
 
-      // Spinal spikes (dorsal spines)
-      if (i % 2 === 0) {
-        const spike = new THREE.Mesh(
-          new THREE.ConeGeometry(0.08, 0.6 - t * 0.3, 4),
-          boneMatDark,
-        );
-        spike.position.set(
-          vert.position.x,
-          vert.position.y + vSize + 0.2,
-          vert.position.z,
-        );
-        spike.castShadow = true;
-        this.group.add(spike);
-      }
+    // Side walls of the maw — dark planes to create enclosed tunnel feel
+    for (const side of [-1, 1]) {
+      const wallGeo = new THREE.PlaneGeometry(3.0, 3.5);
+      const wall = new THREE.Mesh(wallGeo, new THREE.MeshBasicMaterial({
+        color: 0x020203, side: THREE.DoubleSide,
+      }));
+      wall.position.set(cp.x + side * 2.2, 1.5, cp.z + 0.5);
+      wall.rotation.y = side * Math.PI / 2;
+      this.group.add(wall);
     }
 
-    // ── c) Ribcage — arching ribs on each side ──────────────────────
-    const ribCount = 6;
+    // Ceiling of the maw
+    const ceilGeo = new THREE.PlaneGeometry(4.5, 4.0);
+    const ceil = new THREE.Mesh(ceilGeo, new THREE.MeshBasicMaterial({
+      color: 0x010102, side: THREE.DoubleSide,
+    }));
+    ceil.rotation.x = Math.PI / 2;
+    ceil.position.set(cp.x, 2.8, cp.z + 0.5);
+    this.group.add(ceil);
+
+    // ── b) Spine — ground-level vertebrae from skull base toward tail ───
+    // Spine runs close to ground: y≈1.5 near skull, tapering to y≈0.5 at end
+    const spineCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(cp.x, 1.5, cp.z - 3),
+      new THREE.Vector3(cp.x + 0.15, 1.4, cp.z - 7),
+      new THREE.Vector3(cp.x - 0.1, 1.2, cp.z - 11),
+      new THREE.Vector3(cp.x + 0.2, 0.9, cp.z - 15),
+      new THREE.Vector3(cp.x, 0.6, cp.z - 19),
+    ]);
+    const spineCount = 14;
+    for (let i = 0; i < spineCount; i++) {
+      const t = i / (spineCount - 1);
+      const vSize = 0.55 - t * 0.25;
+      const vertGeo = new THREE.DodecahedronGeometry(vSize, 1);
+      const vPos = vertGeo.attributes.position;
+      for (let v = 0; v < vPos.count; v++) {
+        const y = vPos.getY(v), x = vPos.getX(v);
+        // Dorsal process bump up
+        if (y > vSize * 0.3) vPos.setY(v, y + (y - vSize * 0.3) * 0.8);
+        // Transverse process flare
+        if (Math.abs(x) > vSize * 0.4 && Math.abs(y) < vSize * 0.3) vPos.setX(v, x * 1.4);
+      }
+      vPos.needsUpdate = true;
+      vertGeo.computeVertexNormals();
+      displaceBone(vertGeo, 0.03, 200 + i);
+      applyBoneWeathering(vertGeo, { seed: 200 + i, crackDarkness: 0.18 });
+      const vert = new THREE.Mesh(vertGeo, boneMat);
+      const pos = spineCurve.getPoint(t);
+      vert.position.copy(pos);
+      const tangent = spineCurve.getTangent(t);
+      vert.lookAt(pos.clone().add(tangent));
+      vert.castShadow = true;
+      this.group.add(vert);
+    }
+
+    // Dorsal spines — MASSIVE tall spike-like bone protrusions along spine
+    // THE key silhouette feature. Tallest at shoulders (y≈5-6), taper at head/tail
+    const dorsalCount = 18;
+    for (let i = 0; i < dorsalCount; i++) {
+      const t = i / (dorsalCount - 1);
+      const curveT = t * 0.92 + 0.04;
+      const spt = spineCurve.getPoint(curveT);
+      // Height peaks at shoulders (t≈0.15-0.3), tapers both ways
+      const peakT = 0.22;
+      const sizeFactor = Math.max(0.1, 1 - Math.pow(Math.abs(t - peakT) * 1.6, 0.75));
+      const spikeHeight = 0.6 + sizeFactor * 4.5;
+      const spikeRadius = 0.08 + sizeFactor * 0.3;
+      const spikeGeo = new THREE.ConeGeometry(spikeRadius, spikeHeight, 5);
+      // Slight backward curve
+      const spPos = spikeGeo.attributes.position;
+      for (let v = 0; v < spPos.count; v++) {
+        const y = spPos.getY(v);
+        if (y > 0) spPos.setZ(v, spPos.getZ(v) - y * 0.12);
+      }
+      spPos.needsUpdate = true;
+      spikeGeo.computeVertexNormals();
+      displaceBone(spikeGeo, 0.02, 250 + i);
+      applyBoneWeathering(spikeGeo, { seed: 250 + i, bleachAmount: 0.12 });
+      const spike = new THREE.Mesh(spikeGeo, boneMat);
+      spike.position.set(spt.x, spt.y + spikeHeight * 0.5, spt.z);
+      spike.rotation.x = Math.sin(i * 1.7) * 0.1 - 0.06;
+      spike.rotation.z = Math.sin(i * 2.3) * 0.06;
+      spike.castShadow = true;
+      this.group.add(spike);
+    }
+
+    // ── c) Ribcage — arching UP from ground-level spine ─────────────────
+    // Spine is at y≈1.2-1.5 in rib region, ribs arch up to y≈3-4
+    const ribCount = 7;
     for (let i = 0; i < ribCount; i++) {
-      const ribZ = cp.z - 4 - i * 1.8;
-      const ribY = 3.5 - i * 0.3;
-      const ribScale = 1 - i * 0.08;
+      const rt = i / (ribCount - 1);
+      const spineT = 0.05 + rt * 0.45;
+      const attachPt = spineCurve.getPoint(spineT);
+      const ribScale = 1 - i * 0.06;
+      const isBrokenRib = i === 4;
 
       for (const side of [-1, 1]) {
-        // Each rib is a TorusGeometry segment (curved bone)
-        const ribGeo = new THREE.TorusGeometry(2.5 * ribScale, 0.12, 6, 10, Math.PI * 0.7);
+        const arcAngle = Math.PI * (0.7 - i * 0.02);
+        const sideScale = side === -1 ? ribScale : ribScale * 0.88;
+        const ribGeo = new THREE.TorusGeometry(
+          2.0 * sideScale,
+          0.10 - rt * 0.02,
+          6, 12,
+          isBrokenRib && side === 1 ? arcAngle * 0.45 : arcAngle,
+        );
+        displaceBone(ribGeo, 0.02, 300 + i * 2 + (side > 0 ? 1 : 0));
+        applyBoneWeathering(ribGeo, {
+          seed: 300 + i * 2 + (side > 0 ? 1 : 0),
+          mossAmount: side === -1 ? 0.18 : 0.06,
+        });
         const rib = new THREE.Mesh(ribGeo, boneMat);
-        rib.position.set(cp.x, ribY, ribZ);
+        rib.position.copy(attachPt);
+        // Ribs arch upward and outward from ground-level spine
         rib.rotation.y = side * Math.PI / 2;
-        rib.rotation.x = -0.3;
-        rib.rotation.z = side * 0.2;
+        rib.rotation.x = -0.6 - i * 0.03;
+        rib.rotation.z = side * (0.2 + i * 0.02);
         rib.castShadow = true;
         this.group.add(rib);
       }
     }
 
-    // ── d) Wings — skeletal wing frames splayed out ──────────────────
-    for (const side of [-1, 1]) {
-      const wingBase = new THREE.Vector3(cp.x + side * 2, 3.5, cp.z - 6);
+    // Sternum/keel bone — lying flat beneath ribcage near ground
+    const keelGeo = new THREE.BoxGeometry(0.6, 0.4, 5, 3, 3, 6);
+    const keelPos = keelGeo.attributes.position;
+    for (let v = 0; v < keelPos.count; v++) {
+      const y = keelPos.getY(v);
+      if (y < 0) keelPos.setX(v, keelPos.getX(v) * (1 + y * 0.3));
+    }
+    keelPos.needsUpdate = true;
+    keelGeo.computeVertexNormals();
+    displaceBone(keelGeo, 0.04, 320);
+    applyBoneWeathering(keelGeo, { seed: 320 });
+    const keel = new THREE.Mesh(keelGeo, boneMat);
+    const ribMidPt = spineCurve.getPoint(0.2);
+    keel.position.set(ribMidPt.x, 0.2, ribMidPt.z);
+    keel.castShadow = true;
+    this.group.add(keel);
 
-      // Humerus (upper arm bone)
-      const humerus = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.15, 0.2, 4, 6),
-        boneMat,
-      );
-      humerus.position.set(wingBase.x + side * 2, wingBase.y + 0.5, wingBase.z);
-      humerus.rotation.z = side * 1.0;
+    // ── d) Wings — MASSIVE, dramatic wing bones reaching high and wide ──
+    // Each wing: shoulder → humerus → elbow → forearm → wrist → 4 long finger bones
+    // Wing span ~30 units total, height ~12 units
+    for (const side of [-1, 1]) {
+      const wingBase = new THREE.Vector3(cp.x + side * 3.0, 1.8, cp.z - 5);
+
+      // Shoulder joint — large bulbous joint near body
+      const shoulderGeo = new THREE.SphereGeometry(0.55, 8, 8);
+      displaceBone(shoulderGeo, 0.06, 400 + side);
+      applyBoneWeathering(shoulderGeo, { seed: 400 + side });
+      const shoulder = new THREE.Mesh(shoulderGeo, boneMat);
+      shoulder.position.copy(wingBase);
+      shoulder.castShadow = true;
+      this.group.add(shoulder);
+
+      // Humerus — thick upper arm bone sweeping outward and up
+      const humLen = 6.0;
+      const humGeo = new THREE.CylinderGeometry(0.18, 0.32, humLen, 8);
+      const humPos = humGeo.attributes.position;
+      for (let v = 0; v < humPos.count; v++) {
+        const y = humPos.getY(v);
+        const endFactor = Math.max(0, (Math.abs(y) - 2.2) / 0.8);
+        if (endFactor > 0) {
+          humPos.setX(v, humPos.getX(v) * (1 + endFactor * 0.35));
+          humPos.setZ(v, humPos.getZ(v) * (1 + endFactor * 0.35));
+        }
+      }
+      humPos.needsUpdate = true;
+      humGeo.computeVertexNormals();
+      displaceBone(humGeo, 0.03, 405 + side);
+      applyBoneWeathering(humGeo, { seed: 405 + side });
+      const humerus = new THREE.Mesh(humGeo, boneMat);
+      humerus.position.set(wingBase.x + side * 2.5, wingBase.y + 3.0, wingBase.z);
+      humerus.rotation.z = side * 0.55;
+      humerus.rotation.x = 0.12;
       humerus.castShadow = true;
       this.group.add(humerus);
 
-      // Forearm
-      const forearm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.1, 0.15, 5, 6),
-        boneMatDark,
-      );
-      forearm.position.set(wingBase.x + side * 5.5, wingBase.y + 1.5, wingBase.z);
-      forearm.rotation.z = side * 0.6;
+      // Elbow joint — elevated, big knobby joint
+      const elbowPt = new THREE.Vector3(wingBase.x + side * 5.5, 6.5, wingBase.z + 0.3);
+      const elbowGeo = new THREE.SphereGeometry(0.38, 7, 7);
+      displaceBone(elbowGeo, 0.05, 410 + side);
+      applyBoneWeathering(elbowGeo, { seed: 410 + side });
+      const elbow = new THREE.Mesh(elbowGeo, boneMat);
+      elbow.position.copy(elbowPt);
+      elbow.castShadow = true;
+      this.group.add(elbow);
+
+      // Forearm (radius/ulna) — continues outward and upward to peak
+      const foreLen = 7.0;
+      const forearmGeo = new THREE.CylinderGeometry(0.12, 0.22, foreLen, 7);
+      displaceBone(forearmGeo, 0.025, 415 + side);
+      applyBoneWeathering(forearmGeo, { seed: 415 + side });
+      const forearm = new THREE.Mesh(forearmGeo, boneMat);
+      forearm.position.set(elbowPt.x + side * 3.0, 9.5, elbowPt.z - 0.2);
+      forearm.rotation.z = side * 0.4;
+      forearm.rotation.x = 0.08;
       forearm.castShadow = true;
       this.group.add(forearm);
 
-      // Wing fingers (3 long bone fingers splayed out)
-      for (let f = 0; f < 3; f++) {
-        const fingerAngle = side * (0.3 + f * 0.35);
-        const fingerLen = 4 - f * 0.8;
-        const finger = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.04, 0.08, fingerLen, 5),
-          boneMat,
-        );
-        const fBase = new THREE.Vector3(
-          wingBase.x + side * 8,
-          wingBase.y + 2.5 - f * 0.3,
-          wingBase.z + 0.5 - f * 0.8,
-        );
-        finger.position.set(
-          fBase.x + Math.cos(fingerAngle) * fingerLen * 0.4,
-          fBase.y + Math.sin(fingerAngle) * fingerLen * 0.3,
-          fBase.z,
-        );
-        finger.rotation.z = fingerAngle;
+      // Wrist joint — at peak height, wide out
+      const wristPt = new THREE.Vector3(wingBase.x + side * 9.0, 12.0, wingBase.z + 0.5);
+      const wristGeo = new THREE.SphereGeometry(0.3, 6, 6);
+      displaceBone(wristGeo, 0.04, 420 + side);
+      applyBoneWeathering(wristGeo, { seed: 420 + side });
+      const wrist = new THREE.Mesh(wristGeo, boneMat);
+      wrist.position.copy(wristPt);
+      wrist.castShadow = true;
+      this.group.add(wrist);
+
+      // Wing finger bones — 4 long fingers splaying outward and downward
+      // These are the most visible part of the wing!
+      const fingerData = [
+        { len: 8.0, r: 0.10, dx: 2.0, dy: -0.5, dz: 1.5, rz: 0.15, rx: 0.1 },
+        { len: 9.5, r: 0.09, dx: 1.5, dy: -2.5, dz: 0.0, rz: 0.25, rx: 0.25 },
+        { len: 8.5, r: 0.07, dx: 0.8, dy: -4.5, dz: -1.5, rz: 0.35, rx: 0.45 },
+        { len: 6.0, r: 0.05, dx: 0.3, dy: -5.5, dz: -3.0, rz: 0.45, rx: 0.6 },
+      ];
+      const fingerTips: THREE.Vector3[] = [];
+      for (let f = 0; f < fingerData.length; f++) {
+        const fd = fingerData[f];
+        const fingerGeo = new THREE.CylinderGeometry(fd.r * 0.4, fd.r, fd.len, 6);
+        // Add slight curvature to finger bones
+        const fPos = fingerGeo.attributes.position;
+        for (let v = 0; v < fPos.count; v++) {
+          const y = fPos.getY(v);
+          fPos.setX(v, fPos.getX(v) + y * y * 0.008 * side);
+        }
+        fPos.needsUpdate = true;
+        fingerGeo.computeVertexNormals();
+        displaceBone(fingerGeo, 0.015, 430 + side * 10 + f);
+        applyBoneWeathering(fingerGeo, { seed: 430 + side * 10 + f });
+        const finger = new THREE.Mesh(fingerGeo, boneMat);
+        const fx = wristPt.x + side * fd.dx;
+        const fy = wristPt.y + fd.dy;
+        const fz = wristPt.z + fd.dz;
+        finger.position.set(fx, fy, fz);
+        finger.rotation.z = side * fd.rz;
+        finger.rotation.x = fd.rx;
         finger.castShadow = true;
         this.group.add(finger);
 
-        // Claw at finger tip
-        const claw = new THREE.Mesh(
-          new THREE.ConeGeometry(0.05, 0.3, 4),
-          boneMatDark,
-        );
-        claw.position.set(
-          fBase.x + Math.cos(fingerAngle) * fingerLen * 0.85,
-          fBase.y + Math.sin(fingerAngle) * fingerLen * 0.65,
-          fBase.z,
-        );
-        claw.rotation.z = fingerAngle + side * 0.3;
-        this.group.add(claw);
+        // Calculate fingertip position for membrane
+        const tipY = fy - fd.len * 0.4 * Math.cos(fd.rx);
+        const tipX = fx + side * fd.len * 0.3;
+        const tipZ = fz + fd.len * 0.3 * Math.sin(fd.rx);
+        fingerTips.push(new THREE.Vector3(tipX, tipY, tipZ));
       }
 
-      // Tattered membrane remnants between fingers (semi-transparent)
+      // Wing membrane remnants — torn, translucent triangular patches between fingers
       const membraneMat = new THREE.MeshBasicMaterial({
-        color: 0x2a1a10,
-        transparent: true,
-        opacity: 0.15,
-        side: THREE.DoubleSide,
-        depthWrite: false,
+        color: 0x2a1c0e, transparent: true, opacity: 0.12,
+        side: THREE.DoubleSide, depthWrite: false,
       });
-      const memGeo = new THREE.PlaneGeometry(5, 3, 3, 2);
-      const memAtt = memGeo.attributes.position;
-      for (let v = 0; v < memAtt.count; v++) {
-        memAtt.setX(v, memAtt.getX(v) + (Math.random() - 0.5) * 0.8);
-        memAtt.setY(v, memAtt.getY(v) + (Math.random() - 0.5) * 0.5);
+      // Draw membrane between consecutive fingers
+      for (let f = 0; f < fingerTips.length - 1; f++) {
+        const memShape = new THREE.Shape();
+        // Triangle from wrist to two finger tips (in local space)
+        memShape.moveTo(0, 0);
+        const tip1 = fingerTips[f].clone().sub(wristPt);
+        const tip2 = fingerTips[f + 1].clone().sub(wristPt);
+        memShape.lineTo(tip1.x, tip1.y);
+        memShape.lineTo(tip2.x, tip2.y);
+        memShape.lineTo(0, 0);
+
+        // Add holes for torn effect
+        const holeSize = 0.4 + f * 0.2;
+        const hx = (tip1.x + tip2.x) * 0.35;
+        const hy = (tip1.y + tip2.y) * 0.35;
+        const hole = new THREE.Path();
+        hole.moveTo(hx - holeSize, hy - holeSize * 0.6);
+        hole.bezierCurveTo(hx - holeSize * 0.3, hy + holeSize * 0.8, hx + holeSize * 0.3, hy + holeSize * 0.6, hx + holeSize, hy - holeSize * 0.3);
+        hole.bezierCurveTo(hx + holeSize * 0.5, hy - holeSize * 0.9, hx - holeSize * 0.5, hy - holeSize * 0.8, hx - holeSize, hy - holeSize * 0.6);
+        memShape.holes.push(hole);
+
+        const memGeo = new THREE.ShapeGeometry(memShape, 3);
+        const membrane = new THREE.Mesh(memGeo, membraneMat);
+        membrane.position.copy(wristPt);
+        membrane.castShadow = true;
+        this.group.add(membrane);
       }
-      memAtt.needsUpdate = true;
-      const membrane = new THREE.Mesh(memGeo, membraneMat);
-      membrane.position.set(
-        wingBase.x + side * 7,
-        wingBase.y + 2,
-        wingBase.z,
-      );
-      membrane.rotation.y = side * 0.3;
-      this.group.add(membrane);
+
+      // Hanging sinew/tendon strips from wing bones (decomposed membrane)
+      const stripMat = new THREE.MeshBasicMaterial({
+        color: 0x3a2a18, transparent: true, opacity: 0.22,
+        side: THREE.DoubleSide, depthWrite: false,
+      });
+      for (let s = 0; s < 5; s++) {
+        const stripLen = 3.0 + Math.sin(s * 2.1 + side) * 1.5;
+        const stripW = 0.15 + s * 0.02;
+        const stripGeo = new THREE.PlaneGeometry(stripW, stripLen, 1, 8);
+        const stP = stripGeo.attributes.position;
+        for (let v = 0; v < stP.count; v++) {
+          const y = stP.getY(v);
+          stP.setX(v, stP.getX(v) + Math.sin(y * 2.5 + s) * 0.12);
+          stP.setZ(v, Math.sin(y * 1.8 + s * 0.7) * 0.06);
+        }
+        stP.needsUpdate = true;
+        const strip = new THREE.Mesh(stripGeo, stripMat);
+        // Strips hang from along the wing structure
+        const t = s / 4;
+        const hangX = wristPt.x - side * t * 4.0;
+        const hangY = wristPt.y - 2.0 - s * 1.2;
+        const hangZ = wristPt.z + 0.3 - s * 0.8;
+        strip.position.set(hangX, hangY, hangZ);
+        strip.rotation.z = Math.sin(s * 1.4) * 0.15;
+        strip.name = `dragon-strip-${side > 0 ? 'R' : 'L'}-${s}`;
+        this.group.add(strip);
+      }
     }
 
-    // ── e) Front legs (clawed, collapsed on ground) ──────────────────
+    // ── e) Legs — front extended forward flat, rear simplified ──────────
+    // Front legs lying flat on ground, extended forward toward player
     for (const side of [-1, 1]) {
-      const legBase = new THREE.Vector3(cp.x + side * 3.5, 0, cp.z - 1);
+      const legBase = new THREE.Vector3(cp.x + side * 2.5, 0, cp.z - 1);
 
-      // Upper leg
-      const upperLeg = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.18, 0.25, 2.5, 6),
-        boneMat,
-      );
-      upperLeg.position.set(legBase.x, 1.2, legBase.z);
-      upperLeg.rotation.z = side * 0.4;
-      upperLeg.rotation.x = 0.2;
-      upperLeg.castShadow = true;
-      this.group.add(upperLeg);
+      // Scapula/shoulder — flat on ground connecting to body
+      const scapGeo = new THREE.BoxGeometry(1.2, 0.3, 2.0, 4, 2, 4);
+      displaceBone(scapGeo, 0.03, 500 + side);
+      applyBoneWeathering(scapGeo, { seed: 500 + side });
+      const scap = new THREE.Mesh(scapGeo, boneMat);
+      scap.position.set(legBase.x + side * 0.5, 0.2, legBase.z - 1);
+      scap.rotation.y = side * 0.2;
+      scap.castShadow = true;
+      this.group.add(scap);
 
-      // Lower leg
-      const lowerLeg = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.12, 0.18, 2, 6),
-        boneMatDark,
-      );
-      lowerLeg.position.set(legBase.x + side * 1.5, 0.5, legBase.z + 1.5);
-      lowerLeg.rotation.z = side * 0.8;
-      lowerLeg.rotation.x = -0.3;
-      lowerLeg.castShadow = true;
-      this.group.add(lowerLeg);
+      // Upper leg bone — lying flat, extending forward
+      const femurGeo = new THREE.CylinderGeometry(0.18, 0.28, 3.0, 7);
+      const fmPos = femurGeo.attributes.position;
+      for (let v = 0; v < fmPos.count; v++) {
+        const y = fmPos.getY(v);
+        const endF = Math.max(0, (Math.abs(y) - 1.2) / 0.3);
+        if (endF > 0) {
+          fmPos.setX(v, fmPos.getX(v) * (1 + endF * 0.25));
+          fmPos.setZ(v, fmPos.getZ(v) * (1 + endF * 0.25));
+        }
+      }
+      fmPos.needsUpdate = true;
+      femurGeo.computeVertexNormals();
+      displaceBone(femurGeo, 0.03, 505 + side);
+      applyBoneWeathering(femurGeo, { seed: 505 + side });
+      const femur = new THREE.Mesh(femurGeo, boneMat);
+      femur.position.set(legBase.x + side * 1.0, 0.2, legBase.z + 1.5);
+      femur.rotation.z = Math.PI / 2;
+      femur.rotation.y = side * 0.25;
+      femur.castShadow = true;
+      this.group.add(femur);
 
-      // Claws (3 per foot)
+      // Lower leg bone — continuing forward on ground
+      const tibGeo = new THREE.CylinderGeometry(0.12, 0.18, 2.5, 6);
+      displaceBone(tibGeo, 0.025, 510 + side);
+      applyBoneWeathering(tibGeo, { seed: 510 + side });
+      const tibia = new THREE.Mesh(tibGeo, boneMat);
+      tibia.position.set(legBase.x + side * 1.5, 0.15, legBase.z + 3.5);
+      tibia.rotation.z = Math.PI / 2;
+      tibia.rotation.y = side * 0.3;
+      tibia.castShadow = true;
+      this.group.add(tibia);
+
+      // Claws — spread out on ground, extended forward
       for (let c = 0; c < 3; c++) {
-        const claw = new THREE.Mesh(
-          new THREE.ConeGeometry(0.06, 0.5, 4),
-          boneMatDark,
-        );
+        const clawGeo = new THREE.ConeGeometry(0.07, 0.55, 4);
+        displaceBone(clawGeo, 0.01, 520 + side * 10 + c);
+        applyBoneWeathering(clawGeo, { seed: 520 + side * 10 + c, baseColor: [0.75, 0.70, 0.55] });
+        const claw = new THREE.Mesh(clawGeo, boneMat);
         claw.position.set(
-          legBase.x + side * 2.5 + (c - 1) * side * 0.3,
-          0.15,
-          legBase.z + 2.5 + (c - 1) * 0.2,
+          legBase.x + side * (1.8 + c * 0.25),
+          0.08,
+          legBase.z + 5.0 + (c - 1) * 0.3,
         );
-        claw.rotation.x = -Math.PI / 2 + 0.3;
+        claw.rotation.x = -Math.PI / 2 + 0.2;
+        claw.rotation.y = side * (0.1 + (c - 1) * 0.15);
         claw.castShadow = true;
         this.group.add(claw);
       }
     }
 
-    // ── f) Tail — trailing away from spine, ending with a spike ──────
-    const tailSegs = 10;
-    for (let i = 0; i < tailSegs; i++) {
-      const t = i / tailSegs;
-      const tailSize = 0.3 - t * 0.2;
-      const tailGeo = new THREE.SphereGeometry(Math.max(0.05, tailSize), 6, 5);
+    // Rear legs (partially buried, splayed to sides)
+    for (const side of [-1, 1]) {
+      const rearBase = new THREE.Vector3(cp.x + side * 3.5, 0, cp.z - 13);
+      const rFemurGeo = new THREE.CylinderGeometry(0.16, 0.24, 2.5, 6);
+      displaceBone(rFemurGeo, 0.03, 550 + side);
+      applyBoneWeathering(rFemurGeo, { seed: 550 + side });
+      const rFemur = new THREE.Mesh(rFemurGeo, boneMat);
+      rFemur.position.set(rearBase.x, 0.2, rearBase.z);
+      rFemur.rotation.z = Math.PI / 2;
+      rFemur.rotation.y = side * 0.4;
+      rFemur.castShadow = true;
+      this.group.add(rFemur);
+
+      const rTibGeo = new THREE.CylinderGeometry(0.10, 0.16, 2.0, 6);
+      displaceBone(rTibGeo, 0.025, 555 + side);
+      applyBoneWeathering(rTibGeo, { seed: 555 + side });
+      const rTibia = new THREE.Mesh(rTibGeo, boneMat);
+      rTibia.position.set(rearBase.x + side * 1.5, 0.15, rearBase.z + 0.5);
+      rTibia.rotation.z = Math.PI / 2;
+      rTibia.rotation.y = side * 0.3;
+      rTibia.castShadow = true;
+      this.group.add(rTibia);
+    }
+
+    // ── f) Tail — close to ground, curving to one side ──────────────────
+    const tailCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(cp.x, 0.5, cp.z - 20),
+      new THREE.Vector3(cp.x + 2.0, 0.4, cp.z - 23),
+      new THREE.Vector3(cp.x + 3.5, 0.3, cp.z - 25),
+      new THREE.Vector3(cp.x + 3.0, 0.2, cp.z - 27),
+      new THREE.Vector3(cp.x + 1.5, 0.15, cp.z - 29),
+    ]);
+    const tailCount = 12;
+    for (let i = 0; i < tailCount; i++) {
+      const t = i / (tailCount - 1);
+      const size = Math.max(0.06, 0.35 - t * 0.22);
+      const tailGeo = new THREE.DodecahedronGeometry(size, 0);
+      const tPos = tailGeo.attributes.position;
+      for (let v = 0; v < tPos.count; v++) {
+        const y = tPos.getY(v);
+        if (y < -size * 0.3) tPos.setY(v, y * 1.3);
+        else if (y > size * 0.4) tPos.setY(v, y * 0.7);
+      }
+      tPos.needsUpdate = true;
+      tailGeo.computeVertexNormals();
+      displaceBone(tailGeo, 0.02, 600 + i);
+      applyBoneWeathering(tailGeo, { seed: 600 + i, mossAmount: 0.15 });
       const tailVert = new THREE.Mesh(tailGeo, boneMat);
-      const tailCurve = Math.sin(i * 0.4) * 1.5;
-      tailVert.position.set(
-        cp.x + tailCurve,
-        0.8 - t * 0.5,
-        cp.z - 19 - i * 1.0,
-      );
+      const tailPos = tailCurve.getPoint(t);
+      tailVert.position.copy(tailPos);
+      const tangent = tailCurve.getTangent(t);
+      tailVert.lookAt(tailPos.clone().add(tangent));
       tailVert.castShadow = true;
       this.group.add(tailVert);
     }
-    // Tail spike
-    const tailSpike = new THREE.Mesh(
-      new THREE.ConeGeometry(0.15, 0.8, 5),
-      boneMatDark,
-    );
-    tailSpike.position.set(cp.x + Math.sin(tailSegs * 0.4) * 1.5, 0.3, cp.z - 19 - tailSegs * 1.0);
-    tailSpike.rotation.x = Math.PI / 2 + 0.2;
-    this.group.add(tailSpike);
 
-    // ── g) Atmospheric effects — green mist from the maw ────────────
+    // Tail tip — spade/club shape lying flat
+    const tipPt = tailCurve.getPoint(1);
+    const spadeGeo = new THREE.DodecahedronGeometry(0.3, 1);
+    const spadePos = spadeGeo.attributes.position;
+    for (let v = 0; v < spadePos.count; v++) {
+      spadePos.setZ(v, spadePos.getZ(v) * 0.3);
+      spadePos.setX(v, spadePos.getX(v) * (1 + Math.abs(spadePos.getY(v)) * 0.5));
+    }
+    spadePos.needsUpdate = true;
+    spadeGeo.computeVertexNormals();
+    displaceBone(spadeGeo, 0.03, 650);
+    applyBoneWeathering(spadeGeo, { seed: 650, baseColor: [0.78, 0.73, 0.58] });
+    const spade = new THREE.Mesh(spadeGeo, boneMat);
+    spade.position.copy(tipPt);
+    const tipTangent = tailCurve.getTangent(1);
+    spade.lookAt(tipPt.clone().add(tipTangent));
+    spade.castShadow = true;
+    this.group.add(spade);
+
+    // ── g) Atmosphere — shadow, mist, dust, fog ─────────────────────────
+    // Ground shadow ellipse under entire skeleton
+    const shadowGeo = new THREE.PlaneGeometry(16, 35);
+    const shadow = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({
+      color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false,
+    }));
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.set(cp.x + 1, 0.02, cp.z - 12);
+    this.group.add(shadow);
+
+    // Bone fragments scattered around the skeleton
+    const fragRand = boneRand(700);
+    for (let i = 0; i < 10; i++) {
+      const angle = fragRand() * Math.PI * 2;
+      const dist = 2 + fragRand() * 7;
+      const fragGeo = new THREE.IcosahedronGeometry(0.08 + fragRand() * 0.15, 0);
+      displaceBone(fragGeo, 0.04, 700 + i);
+      applyBoneWeathering(fragGeo, { seed: 700 + i });
+      const frag = new THREE.Mesh(fragGeo, boneMat);
+      frag.position.set(
+        cp.x + Math.cos(angle) * dist,
+        0.04,
+        cp.z + Math.sin(angle) * dist * 0.6 - 8,
+      );
+      frag.rotation.set(fragRand() * Math.PI, fragRand() * Math.PI, 0);
+      this.group.add(frag);
+    }
+
+    // Mist planes — eerie green mist drifting from open mouth
     for (let i = 0; i < 5; i++) {
-      const mistGeo = new THREE.PlaneGeometry(2 + Math.random() * 2, 1 + Math.random());
+      const mistGeo = new THREE.PlaneGeometry(2.5 + Math.sin(i * 1.5) * 1, 1.2 + Math.cos(i * 0.8) * 0.5);
       const mist = new THREE.Mesh(mistGeo, new THREE.MeshBasicMaterial({
-        color: 0x44aa66,
-        transparent: true,
-        opacity: 0.1,
-        depthWrite: false,
-        side: THREE.DoubleSide,
+        color: 0x44aa66, transparent: true, opacity: 0.08 + i * 0.01,
+        depthWrite: false, side: THREE.DoubleSide,
       }));
       mist.name = `dragon-mist-${i}`;
       mist.position.set(
-        cp.x + (Math.random() - 0.5) * 3,
-        1 + Math.random() * 2,
-        cp.z + (Math.random() - 0.5) * 2,
+        cp.x + Math.sin(i * 1.3) * 1.5,
+        0.5 + i * 0.3,
+        cp.z + 1.5 + Math.cos(i * 0.7) * 1.5,
       );
-      mist.rotation.y = Math.random() * Math.PI;
+      mist.rotation.y = i * 0.6;
       this.group.add(mist);
     }
 
-    // ── h) Inner glow — eerie light from within the skull ───────────
-    const innerGlow = new THREE.PointLight(0x22ff44, 2, 12);
-    innerGlow.position.set(cp.x, 2.5, cp.z - 1.5);
+    // Bone dust particles (animated upward drift)
+    for (let i = 0; i < 12; i++) {
+      const dustGeo = new THREE.PlaneGeometry(0.06, 0.06);
+      const dust = new THREE.Mesh(dustGeo, new THREE.MeshBasicMaterial({
+        color: 0xd4c8a0, transparent: true, opacity: 0.3,
+        depthWrite: false, side: THREE.DoubleSide,
+      }));
+      dust.name = `dragon-dust-${i}`;
+      const dx = cp.x + (Math.sin(i * 2.1) - 0.5) * 10;
+      const dy = 0.3 + Math.cos(i * 1.3) * 1.5;
+      const dz = cp.z - 5 + Math.sin(i * 0.9) * 10;
+      dust.position.set(dx, dy, dz);
+      dust.userData.baseY = dy;
+      dust.rotation.set(Math.sin(i) * Math.PI, Math.cos(i) * Math.PI, 0);
+      this.group.add(dust);
+    }
+
+    // Inner cave fog planes — inside the skull maw
+    for (let i = 0; i < 3; i++) {
+      const fogGeo = new THREE.PlaneGeometry(4, 2.5);
+      const fog = new THREE.Mesh(fogGeo, new THREE.MeshBasicMaterial({
+        color: 0x112211, transparent: true, opacity: 0.15 - i * 0.03,
+        depthWrite: false, side: THREE.DoubleSide,
+      }));
+      fog.name = `dragon-cave-fog-${i}`;
+      fog.position.set(cp.x, 1.0, cp.z - 2 - i * 1.5);
+      fog.rotation.y = i * 0.2;
+      this.group.add(fog);
+    }
+
+    // ── h) Inner glow — eerie light from within the skull maw ───────────
+    const innerGlow = new THREE.PointLight(0x22ff44, 3, 14);
+    innerGlow.position.set(cp.x, 1.5, cp.z + 0.5);
     innerGlow.name = 'dragon-inner-glow';
     this.group.add(innerGlow);
 
-    const dungeonGlow = new THREE.PointLight(0x33cc55, 1.5, 8);
-    dungeonGlow.position.set(cp.x, 1.5, cp.z - 0.5);
+    const dungeonGlow = new THREE.PointLight(0x33cc55, 2.0, 10);
+    dungeonGlow.position.set(cp.x, 1.0, cp.z + 2.0);
     dungeonGlow.name = 'dragon-dungeon-glow';
     this.group.add(dungeonGlow);
 
-    // ── i) Sign ─────────────────────────────────────────────────────
+    // ── i) Sign — 'THE DEPTHS' above the skull ─────────────────────────
     const sign = this.createTextSign('THE DEPTHS', 0x88ffaa);
-    sign.position.set(cp.x, 8.5, cp.z + 0.5);
+    sign.position.set(cp.x, 7.0, cp.z + 1.0);
     this.group.add(sign);
-
-    // ── j) Scattered bones around the skeleton ──────────────────────
-    const scatterBoneMat = new THREE.MeshStandardMaterial({ color: 0xc0b490, roughness: 0.82 });
-    for (let i = 0; i < 15; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 2 + Math.random() * 5;
-      const bx = cp.x + Math.cos(angle) * dist;
-      const bz = cp.z + Math.sin(angle) * dist * 0.5 + 2;
-      const boneLen = 0.3 + Math.random() * 0.5;
-      const bone = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.02, 0.03, boneLen, 4),
-        scatterBoneMat,
-      );
-      bone.position.set(bx, 0.05, bz);
-      bone.rotation.z = Math.PI / 2;
-      bone.rotation.y = Math.random() * Math.PI;
-      this.group.add(bone);
-    }
   }
 
 
@@ -2400,11 +2705,6 @@ export class HubWorld {
       this.createLantern(x, z);
     }
 
-    // Banners on poles near plaza
-    this.createBanner(-5, -5, 0xff3333);
-    this.createBanner(5, -5, 0x3333ff);
-    this.createBanner(-5, 5, 0x33ff33);
-    this.createBanner(5, 5, 0xffcc00);
   }
 
   private createFlowerBush(x: number, z: number, color: number) {
@@ -2416,48 +2716,235 @@ export class HubWorld {
     this.group.add(bush);
   }
 
+  private brazierIndex = 0;
+
   private createLantern(x: number, z: number) {
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.05, 0.05, 3, 4),
-      new THREE.MeshStandardMaterial({ color: 0x333333 }),
+    const idx = this.brazierIndex++;
+
+    // Stone pillar base — tapered, rough stone look
+    const baseMat = new THREE.MeshStandardMaterial({ color: 0x555550, roughness: 0.95, metalness: 0.05 });
+
+    // Square plinth
+    const plinth = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 0.2, 0.6),
+      baseMat,
     );
-    pole.position.set(x, 1.5, z);
-    this.group.add(pole);
+    plinth.position.set(x, 0.1, z);
+    this.group.add(plinth);
 
-    const lampGeo = new THREE.SphereGeometry(0.2, 8, 8);
-    const lampMat = new THREE.MeshStandardMaterial({
-      color: 0xffdd88,
-      emissive: 0xffaa44,
-      emissiveIntensity: 0.8,
-    });
-    const lamp = new THREE.Mesh(lampGeo, lampMat);
-    lamp.position.set(x, 3.1, z);
-    this.group.add(lamp);
+    // Tapered pillar
+    const pillar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15, 0.22, 1.2, 6),
+      baseMat,
+    );
+    pillar.position.set(x, 0.8, z);
+    this.group.add(pillar);
 
-    const light = new THREE.PointLight(0xffaa44, 0.5, 6);
-    light.position.set(x, 3.1, z);
+    // Bowl (open-top brazier)
+    const bowlOuter = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.35, 0.18, 0.3, 8),
+      new THREE.MeshStandardMaterial({ color: 0x443322, roughness: 0.8, metalness: 0.3 }),
+    );
+    bowlOuter.position.set(x, 1.55, z);
+    this.group.add(bowlOuter);
+
+    // Inner dark cavity
+    const bowlInner = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.14, 0.18, 8),
+      new THREE.MeshStandardMaterial({ color: 0x111111 }),
+    );
+    bowlInner.position.set(x, 1.58, z);
+    this.group.add(bowlInner);
+
+    // Ember bed (glowing coals at bottom)
+    const embers = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.22, 0.12, 0.08, 8),
+      new THREE.MeshStandardMaterial({
+        color: 0xff4400,
+        emissive: 0xff2200,
+        emissiveIntensity: 1.5,
+      }),
+    );
+    embers.position.set(x, 1.58, z);
+    embers.name = `brazier-embers-${idx}`;
+    this.group.add(embers);
+
+    // Flame particles (3 teardrop shapes at different phases)
+    for (let f = 0; f < 3; f++) {
+      const flameGeo = new THREE.ConeGeometry(0.08 + f * 0.03, 0.35 + f * 0.1, 5);
+      const flameMat = new THREE.MeshBasicMaterial({
+        color: f === 0 ? 0xffdd44 : f === 1 ? 0xff8811 : 0xff4400,
+        transparent: true,
+        opacity: 0.8 - f * 0.15,
+      });
+      const flame = new THREE.Mesh(flameGeo, flameMat);
+      flame.position.set(x, 1.85 + f * 0.08, z);
+      flame.name = `brazier-flame-${idx}-${f}`;
+      flame.userData.baseX = x;
+      flame.userData.baseZ = z;
+      flame.userData.baseY = 1.85 + f * 0.08;
+      this.group.add(flame);
+    }
+
+    // Warm point light
+    const light = new THREE.PointLight(0xff8833, 0.6, 8);
+    light.position.set(x, 2.2, z);
+    light.name = `brazier-light-${idx}`;
     this.group.add(light);
   }
 
-  private createBanner(x: number, z: number, color: number) {
-    // Pole
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, 5, 4),
-      new THREE.MeshStandardMaterial({ color: 0x666666 }),
-    );
-    pole.position.set(x, 2.5, z);
-    this.group.add(pole);
+  private buildRocks() {
+    // Seeded random for deterministic placement
+    let seed = 42;
+    const rand = () => { seed = (seed * 16807 + 0) % 2147483647; return (seed - 1) / 2147483646; };
 
-    // Banner cloth
-    const bannerGeo = new THREE.PlaneGeometry(0.8, 1.5);
-    const bannerMat = new THREE.MeshStandardMaterial({
-      color,
-      side: THREE.DoubleSide,
-      roughness: 0.9,
+    // Areas to avoid: fountain (0,0 r4), paths (width ~3), shop (-12,-5), pvp (15,-8), portal (0,-25), spawn altar (0,12)
+    const isOnPath = (x: number, z: number): boolean => {
+      // North path to portal
+      if (Math.abs(x) < 2.5 && z < 0 && z > -30) return true;
+      // West to shop
+      const t1 = Math.max(0, Math.min(1, (x * -15 + z * -5) / (225 + 25)));
+      const px1 = -15 * t1, pz1 = -5 * t1;
+      if (Math.sqrt((x - px1) ** 2 + (z - pz1) ** 2) < 2.5) return true;
+      // East to pvp
+      const t2 = Math.max(0, Math.min(1, (x * 18 + z * -8) / (324 + 64)));
+      const px2 = 18 * t2, pz2 = -8 * t2;
+      if (Math.sqrt((x - px2) ** 2 + (z - pz2) ** 2) < 2.5) return true;
+      // South spawn path
+      if (Math.abs(x) < 2.5 && z > 0 && z < 16) return true;
+      return false;
+    };
+
+    const isBlocked = (x: number, z: number): boolean => {
+      const d = Math.sqrt(x * x + z * z);
+      if (d < 6) return true; // fountain/plaza
+      if (d > 50) return true; // too far out
+      if (isOnPath(x, z)) return true;
+      // Shop area
+      if (x > -16 && x < -8 && z > -9 && z < -1) return true;
+      // PvP arena
+      if (x > 11 && x < 20 && z > -13 && z < -3) return true;
+      // Portal area
+      if (Math.abs(x) < 5 && z < -20 && z > -30) return true;
+      // Spawn altar
+      if (Math.abs(x) < 4 && z > 10 && z < 18) return true;
+      // NPCs
+      if (Math.sqrt((x - 8) ** 2 + (z - 5) ** 2) < 3) return true;
+      if (Math.sqrt((x - 6) ** 2 + (z + 18) ** 2) < 3) return true;
+      if (Math.sqrt((x + 4) ** 2 + (z + 4) ** 2) < 3) return true;
+      return false;
+    };
+
+    // Create displaced rock geometry for realistic shape
+    const makeRockGeo = (baseSize: number): THREE.BufferGeometry => {
+      // Start with dodecahedron for organic shape
+      const detail = baseSize > 0.5 ? 2 : 1;
+      const geo = new THREE.DodecahedronGeometry(baseSize, detail);
+      const pos = geo.attributes.position;
+
+      for (let i = 0; i < pos.count; i++) {
+        const ox = pos.getX(i), oy = pos.getY(i), oz = pos.getZ(i);
+        const dist = Math.sqrt(ox * ox + oy * oy + oz * oz);
+        // Noise displacement based on position
+        const n1 = Math.sin(ox * 5.3 + oy * 3.7) * Math.cos(oz * 4.1 + ox * 2.3);
+        const n2 = Math.sin(oy * 7.1 + oz * 5.9) * 0.5;
+        const displacement = 1.0 + (n1 * 0.25 + n2 * 0.15);
+        const scale = displacement * (0.85 + Math.abs(Math.sin(ox * 3 + oz * 2)) * 0.3);
+        pos.setXYZ(i, ox * scale, oy * scale * 0.65, oz * scale); // flatten Y for natural look
+      }
+
+      geo.computeVertexNormals();
+
+      // Vertex colors for subtle surface variation
+      const colors = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) {
+        const y = pos.getY(i);
+        const n = Math.sin(pos.getX(i) * 8 + pos.getZ(i) * 6) * 0.5 + 0.5;
+        // Mix grey tones with slight warmth
+        const base = 0.32 + n * 0.12;
+        const mossy = Math.max(0, y / baseSize) * 0.03; // slight green on top
+        colors[i * 3] = base + 0.02;
+        colors[i * 3 + 1] = base + mossy + 0.01;
+        colors[i * 3 + 2] = base - 0.02;
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      return geo;
+    };
+
+    const rockMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.95,
+      metalness: 0.02,
     });
-    const banner = new THREE.Mesh(bannerGeo, bannerMat);
-    banner.position.set(x + 0.5, 4, z);
-    this.group.add(banner);
+
+    // Place individual rocks — scattered naturally
+    const rockConfigs: { x: number; z: number; size: number; rotY: number; scaleXZ: number }[] = [];
+
+    // Generate ~25 scattered rocks
+    let attempts = 0;
+    while (rockConfigs.length < 25 && attempts < 200) {
+      attempts++;
+      const angle = rand() * Math.PI * 2;
+      const dist = 8 + rand() * 38;
+      const x = Math.cos(angle) * dist;
+      const z = Math.sin(angle) * dist;
+
+      if (isBlocked(x, z)) continue;
+
+      // Check spacing from other rocks
+      let tooClose = false;
+      for (const r of rockConfigs) {
+        if (Math.sqrt((x - r.x) ** 2 + (z - r.z) ** 2) < 2.5) { tooClose = true; break; }
+      }
+      if (tooClose) continue;
+
+      const size = 0.2 + rand() * 0.6;
+      rockConfigs.push({
+        x, z, size,
+        rotY: rand() * Math.PI * 2,
+        scaleXZ: 0.8 + rand() * 0.4,
+      });
+    }
+
+    // Also add a few small clusters (2-3 rocks close together)
+    for (let c = 0; c < 5; c++) {
+      const angle = rand() * Math.PI * 2;
+      const dist = 12 + rand() * 30;
+      const cx = Math.cos(angle) * dist;
+      const cz = Math.sin(angle) * dist;
+
+      if (isBlocked(cx, cz)) continue;
+
+      for (let j = 0; j < 2 + Math.floor(rand() * 2); j++) {
+        const ox = cx + (rand() - 0.5) * 1.5;
+        const oz = cz + (rand() - 0.5) * 1.5;
+        if (isBlocked(ox, oz)) continue;
+
+        rockConfigs.push({
+          x: ox, z: oz,
+          size: 0.15 + rand() * 0.3,
+          rotY: rand() * Math.PI * 2,
+          scaleXZ: 0.8 + rand() * 0.4,
+        });
+      }
+    }
+
+    // Build meshes
+    for (const cfg of rockConfigs) {
+      const geo = makeRockGeo(cfg.size);
+      const rock = new THREE.Mesh(geo, rockMat);
+      // Sink partially into ground
+      const sinkDepth = cfg.size * 0.3;
+      rock.position.set(cfg.x, cfg.size * 0.65 - sinkDepth, cfg.z);
+      rock.rotation.y = cfg.rotY;
+      rock.rotation.x = (rand() - 0.5) * 0.2; // slight tilt
+      rock.rotation.z = (rand() - 0.5) * 0.15;
+      rock.scale.set(cfg.scaleXZ, 1, cfg.scaleXZ);
+      rock.castShadow = true;
+      rock.receiveShadow = true;
+      this.group.add(rock);
+    }
   }
 
   private buildLighting() {
@@ -2516,6 +3003,40 @@ export class HubWorld {
 
   // Called each frame for animations
   update(time: number, playerPos?: THREE.Vector3) {
+    // ── Fire brazier animations ────────────────────────────────────
+    for (let i = 0; i < this.brazierIndex; i++) {
+      // Flame dance — each of the 3 flame cones sways independently
+      for (let f = 0; f < 3; f++) {
+        const flame = this.group.getObjectByName(`brazier-flame-${i}-${f}`);
+        if (flame) {
+          const phase = i * 2.7 + f * 1.3;
+          // Sway side to side
+          flame.position.x = flame.userData.baseX + Math.sin(time * 4.5 + phase) * 0.04;
+          flame.position.z = flame.userData.baseZ + Math.cos(time * 3.8 + phase * 0.7) * 0.03;
+          // Flicker height
+          flame.position.y = flame.userData.baseY + Math.sin(time * 7 + phase) * 0.04;
+          // Scale flicker
+          const flicker = 0.85 + Math.sin(time * 9 + phase) * 0.15;
+          flame.scale.set(flicker, 0.7 + Math.sin(time * 6 + phase) * 0.3, flicker);
+          // Opacity flicker
+          const mat = (flame as THREE.Mesh).material as THREE.MeshBasicMaterial;
+          mat.opacity = (0.65 - f * 0.1) + Math.sin(time * 8 + phase) * 0.2;
+        }
+      }
+      // Light intensity flicker
+      const light = this.group.getObjectByName(`brazier-light-${i}`);
+      if (light) {
+        const phase = i * 1.9;
+        (light as THREE.PointLight).intensity = 0.5 + Math.sin(time * 5 + phase) * 0.15 + Math.sin(time * 8.3 + phase) * 0.08;
+      }
+      // Ember glow pulse
+      const embers = this.group.getObjectByName(`brazier-embers-${i}`);
+      if (embers) {
+        const mat = (embers as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        mat.emissiveIntensity = 1.2 + Math.sin(time * 3 + i * 0.8) * 0.5;
+      }
+    }
+
         // ── Dragon skeleton entrance animations ─────────────────────────
     // Eye glow pulse
     for (const side of ['L', 'R']) {
@@ -2551,7 +3072,39 @@ export class HubWorld {
       (dungeonGlow as THREE.PointLight).intensity = 1.2 + Math.sin(time * 1.5) * 0.4;
     }
 
+    // Bone dust particle drift
+    for (let i = 0; i < 12; i++) {
+      const dust = this.group.getObjectByName(`dragon-dust-${i}`);
+      if (dust) {
+        dust.position.y += 0.003;
+        if (dust.position.y > dust.userData.baseY + 4) {
+          dust.position.y = dust.userData.baseY;
+        }
+        const dMat = (dust as THREE.Mesh).material as THREE.MeshBasicMaterial;
+        const h = dust.position.y - dust.userData.baseY;
+        dMat.opacity = 0.3 * (1 - h / 4);
+      }
+    }
 
+    // Cave fog breathing
+    for (let i = 0; i < 3; i++) {
+      const fog = this.group.getObjectByName(`dragon-cave-fog-${i}`);
+      if (fog) {
+        const fMat = (fog as THREE.Mesh).material as THREE.MeshBasicMaterial;
+        fMat.opacity = (0.12 - i * 0.03) + Math.sin(time * 0.3 + i * 1.5) * 0.04;
+      }
+    }
+
+    // Hanging sinew strips gentle sway
+    for (const wSide of ['L', 'R']) {
+      for (let s = 0; s < 5; s++) {
+        const strip = this.group.getObjectByName(`dragon-strip-${wSide}-${s}`);
+        if (strip) {
+          strip.rotation.z = Math.sin(time * 0.4 + s * 1.2 + (wSide === 'L' ? 0 : 2)) * 0.08;
+          strip.rotation.x = Math.sin(time * 0.3 + s * 0.9) * 0.05;
+        }
+      }
+    }
 
     // ── Tree of Life animations ──────────────────────────────────────
     // Fireflies - gentle floating movement

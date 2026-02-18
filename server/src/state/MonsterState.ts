@@ -11,6 +11,8 @@ export class MonsterState extends Schema {
   aiState: string = 'idle';
   targetId: string = '';
   animation: string = 'idle';
+  bossPhase: number = 0;
+  statusEffect: string = '';
 }
 defineTypes(MonsterState, {
   id: 'string',
@@ -22,4 +24,6 @@ defineTypes(MonsterState, {
   aiState: 'string',
   targetId: 'string',
   animation: 'string',
+  bossPhase: 'uint8',
+  statusEffect: 'string',
 });

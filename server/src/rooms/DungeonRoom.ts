@@ -8,7 +8,10 @@ import {
   MONSTER_DEFS, FOREST_DUNGEON, MONSTER_GOLD_DROP,
   MELEE_SKILL_TREE, SKILL_POINTS_PER_LEVEL, MANA_REGEN_RATE,
   SKILL_RANGE_AOE, CHARGE_DISTANCE,
-  type PlayerInput, type Rarity, type DungeonRoomDef,
+  BASE_CRIT_CHANCE, CRIT_PER_DEX, CRIT_MULTIPLIER, MAX_CRIT_CHANCE,
+  BASE_DODGE_CHANCE, DODGE_PER_DEX, MAX_DODGE_CHANCE,
+  POTION_HEAL_AMOUNT, POTION_COOLDOWN,
+  type PlayerInput, type Rarity, type DungeonRoomDef, type StatusEffectDef,
 } from '@saab/shared';
 import { distanceXZ } from '@saab/shared';
 import { InventoryService } from '../services/InventoryService.js';
@@ -31,6 +34,52 @@ interface MonsterRuntime {
   respawnTimer: number;
   respawnTime: number;
   dead: boolean;
+  currentPhase: number;
+}
+
+interface ActiveStatusEffect {
+  type: string;
+  sourceId: string;
+  damagePerTick: number;
+  tickRate: number;
+  remainingDuration: number;
+  tickTimer: number;
+}
+
+interface ServerProjectile {
+  id: string;
+  sourceId: string;
+  position: { x: number; y: number; z: number };
+  velocity: { x: number; y: number; z: number };
+  damage: number;
+  lifetime: number;
+  statusEffect?: StatusEffectDef;
+  hitRadius: number;
+}
+
+function calculateDamage(
+  rawDmg: number,
+  attackerDex: number,
+  defenderArmor: number,
+  defenderDex?: number,
+): { finalDamage: number; isCrit: boolean; isDodge: boolean } {
+  // Dodge check (only if defender has dex)
+  if (defenderDex !== undefined) {
+    const dodgeChance = Math.min(MAX_DODGE_CHANCE, BASE_DODGE_CHANCE + defenderDex * DODGE_PER_DEX);
+    if (Math.random() < dodgeChance) {
+      return { finalDamage: 0, isCrit: false, isDodge: true };
+    }
+  }
+
+  // Crit check
+  const critChance = Math.min(MAX_CRIT_CHANCE, BASE_CRIT_CHANCE + attackerDex * CRIT_PER_DEX);
+  const isCrit = Math.random() < critChance;
+  let damage = isCrit ? Math.floor(rawDmg * CRIT_MULTIPLIER) : rawDmg;
+
+  // Armor mitigation
+  damage = Math.max(1, damage - defenderArmor);
+
+  return { finalDamage: damage, isCrit, isDodge: false };
 }
 
 export class DungeonRoom extends Room<DungeonState> {
@@ -44,6 +93,11 @@ export class DungeonRoom extends Room<DungeonState> {
   private inventory = new InventoryService();
   private floors: DungeonRoomDef[] = [];
   private monsterIdx = 0;
+  private potionCooldowns = new Map<string, number>(); // playerId -> expiry timestamp
+  private playerStatusEffects = new Map<string, ActiveStatusEffect[]>(); // playerId -> effects
+  private monsterAbilityCooldowns = new Map<string, Map<string, number>>(); // monsterId -> abilityId -> expiry
+  private projectiles = new Map<string, ServerProjectile>();
+  private projectileIdx = 0;
 
   onCreate(options: { dungeonId?: string }) {
     const dungeonId = options.dungeonId || 'forest';
@@ -152,6 +206,47 @@ export class DungeonRoom extends Room<DungeonState> {
       client.send('skills_full', { allocations, hotbar, skillPoints });
     });
 
+    // Health potion / consumable usage
+    this.onMessage('use_item', (client: Client, data: { defId: string }) => {
+      if (!data || typeof data.defId !== 'string') return;
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.stats.hp <= 0) return;
+
+      if (data.defId === 'health_potion') {
+        const now = Date.now();
+        const cdExpiry = this.potionCooldowns.get(client.sessionId) || 0;
+        if (now < cdExpiry) {
+          client.send('use_item_fail', { error: 'Potion on cooldown' });
+          return;
+        }
+
+        if (!this.inventory.consumeStackable(client.sessionId, 'health_potion', 1)) {
+          client.send('use_item_fail', { error: 'No health potions' });
+          return;
+        }
+
+        const healAmount = Math.min(POTION_HEAL_AMOUNT, player.stats.maxHp - player.stats.hp);
+        player.stats.hp += healAmount;
+        this.potionCooldowns.set(client.sessionId, now + POTION_COOLDOWN * 1000);
+
+        client.send('item_used', { defId: 'health_potion', healAmount });
+
+        // Refresh inventory
+        const items = this.inventory.getItems(client.sessionId);
+        const gold = this.inventory.getGold(client.sessionId);
+        client.send('inventory_full', { items, gold });
+
+        // Show heal as floating text
+        this.broadcast('damage', {
+          targetId: client.sessionId,
+          amount: healAmount,
+          isCrit: false,
+          isDodge: false,
+          isHeal: true,
+        });
+      }
+    });
+
     // Next floor request
     this.onMessage('next_floor', (client: Client) => {
       if (!this.state.floorCleared) return;
@@ -220,6 +315,7 @@ export class DungeonRoom extends Room<DungeonState> {
         respawnTimer: 0,
         respawnTime: isBossFloor ? 0 : spawn.respawnTime,
         dead: false,
+        currentPhase: 0,
       });
     }
 
@@ -321,16 +417,22 @@ export class DungeonRoom extends Room<DungeonState> {
     if (!closestId) return;
     const monster = this.state.monsters.get(closestId)!;
 
-    const damage = BASIC_ATTACK_DAMAGE + player.stats.strength;
+    const rawDmg = BASIC_ATTACK_DAMAGE + player.stats.strength;
     const def = MONSTER_DEFS[monster.defId];
-    const mitigated = Math.max(1, damage - (def?.armor || 0));
+    const result = calculateDamage(rawDmg, player.stats.dexterity, def?.armor || 0);
 
-    monster.hp -= mitigated;
+    if (result.isDodge) {
+      this.broadcast('damage', { targetId: closestId, amount: 0, isCrit: false, isDodge: true });
+      return;
+    }
+
+    monster.hp -= result.finalDamage;
 
     this.broadcast('damage', {
       targetId: closestId,
-      amount: mitigated,
-      isCrit: false,
+      amount: result.finalDamage,
+      isCrit: result.isCrit,
+      isDodge: false,
     });
 
     if (monster.hp <= 0) {
@@ -395,7 +497,7 @@ export class DungeonRoom extends Room<DungeonState> {
       // 150% dmg to closest, +10% per extra point
       const dmgMult = effect.value + extraPoints * 0.1;
       const baseDmg = BASIC_ATTACK_DAMAGE + player.stats.strength;
-      const damage = Math.floor(baseDmg * dmgMult);
+      const rawDmg = Math.floor(baseDmg * dmgMult);
 
       let closestId: string | null = null;
       let closestDist = BASIC_ATTACK_RANGE + 1;
@@ -411,16 +513,20 @@ export class DungeonRoom extends Room<DungeonState> {
       if (closestId) {
         const monster = this.state.monsters.get(closestId)!;
         const def = MONSTER_DEFS[monster.defId];
-        const mitigated = Math.max(1, damage - (def?.armor || 0));
-        monster.hp -= mitigated;
-        this.broadcast('damage', { targetId: closestId, amount: mitigated, isCrit: false });
-        if (monster.hp <= 0) this.onMonsterKilled(closestId, monster, playerId);
+        const result = calculateDamage(rawDmg, player.stats.dexterity, def?.armor || 0);
+        if (!result.isDodge) {
+          monster.hp -= result.finalDamage;
+          this.broadcast('damage', { targetId: closestId, amount: result.finalDamage, isCrit: result.isCrit, isDodge: false });
+          if (monster.hp <= 0) this.onMonsterKilled(closestId, monster, playerId);
+        } else {
+          this.broadcast('damage', { targetId: closestId, amount: 0, isCrit: false, isDodge: true });
+        }
       }
     } else if (skillId === 'melee_whirlwind') {
       // AoE: 80% dmg in radius, +10% per extra point
       const dmgMult = effect.value + extraPoints * 0.1;
       const baseDmg = BASIC_ATTACK_DAMAGE + player.stats.strength;
-      const damage = Math.floor(baseDmg * dmgMult);
+      const rawDmg = Math.floor(baseDmg * dmgMult);
 
       this.state.monsters.forEach((monster, id) => {
         if (monster.hp <= 0) return;
@@ -430,10 +536,14 @@ export class DungeonRoom extends Room<DungeonState> {
         );
         if (dist <= SKILL_RANGE_AOE) {
           const def = MONSTER_DEFS[monster.defId];
-          const mitigated = Math.max(1, damage - (def?.armor || 0));
-          monster.hp -= mitigated;
-          this.broadcast('damage', { targetId: id, amount: mitigated, isCrit: false });
-          if (monster.hp <= 0) this.onMonsterKilled(id, monster, playerId);
+          const result = calculateDamage(rawDmg, player.stats.dexterity, def?.armor || 0);
+          if (!result.isDodge) {
+            monster.hp -= result.finalDamage;
+            this.broadcast('damage', { targetId: id, amount: result.finalDamage, isCrit: result.isCrit, isDodge: false });
+            if (monster.hp <= 0) this.onMonsterKilled(id, monster, playerId);
+          } else {
+            this.broadcast('damage', { targetId: id, amount: 0, isCrit: false, isDodge: true });
+          }
         }
       });
     } else if (skillId === 'melee_charge') {
@@ -457,12 +567,17 @@ export class DungeonRoom extends Room<DungeonState> {
         const stunDuration = effect.value * 1000; // 1.5s
         this.monsterStuns.set(closestId, now + stunDuration);
         const baseDmg = BASIC_ATTACK_DAMAGE + player.stats.strength;
+        const rawDmg = Math.floor(baseDmg * 0.5);
         const monster = this.state.monsters.get(closestId)!;
         const def = MONSTER_DEFS[monster.defId];
-        const mitigated = Math.max(1, Math.floor(baseDmg * 0.5) - (def?.armor || 0));
-        monster.hp -= mitigated;
-        this.broadcast('damage', { targetId: closestId, amount: mitigated, isCrit: false });
-        if (monster.hp <= 0) this.onMonsterKilled(closestId, monster, playerId);
+        const result = calculateDamage(rawDmg, player.stats.dexterity, def?.armor || 0);
+        if (!result.isDodge) {
+          monster.hp -= result.finalDamage;
+          this.broadcast('damage', { targetId: closestId, amount: result.finalDamage, isCrit: result.isCrit, isDodge: false });
+          if (monster.hp <= 0) this.onMonsterKilled(closestId, monster, playerId);
+        } else {
+          this.broadcast('damage', { targetId: closestId, amount: 0, isCrit: false, isDodge: true });
+        }
       }
     }
 
@@ -577,6 +692,188 @@ export class DungeonRoom extends Room<DungeonState> {
     });
   }
 
+  private applyStatusEffect(targetId: string, effectDef: StatusEffectDef, sourceId: string) {
+    let effects = this.playerStatusEffects.get(targetId);
+    if (!effects) {
+      effects = [];
+      this.playerStatusEffects.set(targetId, effects);
+    }
+
+    // Refresh existing same-type effect instead of stacking
+    const existing = effects.find((e) => e.type === effectDef.type);
+    if (existing) {
+      existing.remainingDuration = effectDef.duration;
+      existing.tickTimer = 0;
+      return;
+    }
+
+    effects.push({
+      type: effectDef.type,
+      sourceId,
+      damagePerTick: effectDef.damage,
+      tickRate: effectDef.tickRate,
+      remainingDuration: effectDef.duration,
+      tickTimer: 0,
+    });
+
+    this.broadcast('status_effect', { targetId, type: effectDef.type, duration: effectDef.duration });
+  }
+
+  private checkBossPhaseTransition(monsterId: string, monster: MonsterState, runtime: MonsterRuntime) {
+    const def = MONSTER_DEFS[runtime.defId];
+    if (!def?.isBoss || !def.phases) return;
+
+    const hpRatio = monster.hp / monster.maxHp;
+    let targetPhase = 0;
+    for (let i = def.phases.length - 1; i >= 0; i--) {
+      if (hpRatio <= def.phases[i].hpThreshold) {
+        targetPhase = i;
+        break;
+      }
+    }
+
+    if (targetPhase > runtime.currentPhase) {
+      runtime.currentPhase = targetPhase;
+      monster.bossPhase = targetPhase;
+      this.broadcast('boss_phase', {
+        monsterId,
+        phase: targetPhase,
+        bossName: def.name,
+      });
+    }
+  }
+
+  private executeBossAbility(monsterId: string, monster: MonsterState, runtime: MonsterRuntime, abilityId: string) {
+    const def = MONSTER_DEFS[runtime.defId];
+    if (!def?.abilities) return;
+    const ability = def.abilities.find((a) => a.id === abilityId);
+    if (!ability) return;
+
+    if (abilityId === 'treant_ground_slam') {
+      // Telegraph then damage
+      this.broadcast('boss_telegraph', {
+        type: 'ground_slam',
+        x: monster.position.x,
+        z: monster.position.z,
+        radius: ability.range,
+        duration: 1.5,
+      });
+
+      setTimeout(() => {
+        // Damage all players in radius
+        this.state.players.forEach((player) => {
+          if (player.stats.hp <= 0) return;
+          const dist = distanceXZ(
+            { x: monster.position.x, y: 0, z: monster.position.z },
+            { x: player.position.x, y: 0, z: player.position.z },
+          );
+          if (dist <= ability.range) {
+            let dmg = ability.damage;
+            if (def.phases && def.phases[runtime.currentPhase]) {
+              dmg = Math.floor(dmg * def.phases[runtime.currentPhase].damageMultiplier);
+            }
+            const result = calculateDamage(dmg, 0, player.stats.armor, player.stats.dexterity);
+            if (!result.isDodge) {
+              player.stats.hp -= result.finalDamage;
+              this.broadcast('damage', { targetId: player.id, amount: result.finalDamage, isCrit: result.isCrit, isDodge: false });
+              if (player.stats.hp <= 0) {
+                player.stats.hp = 0;
+                player.animation = 'death';
+                this.broadcast('player_died', { playerId: player.id });
+              }
+            } else {
+              this.broadcast('damage', { targetId: player.id, amount: 0, isCrit: false, isDodge: true });
+            }
+          }
+        });
+      }, 1500);
+    } else if (abilityId === 'treant_root_trap') {
+      // Root the closest player
+      let closestPlayer: PlayerState | null = null as PlayerState | null;
+      let closestDist = ability.range;
+      this.state.players.forEach((p) => {
+        if (p.stats.hp <= 0) return;
+        const d = distanceXZ(
+          { x: monster.position.x, y: 0, z: monster.position.z },
+          { x: p.position.x, y: 0, z: p.position.z },
+        );
+        if (d < closestDist) { closestDist = d; closestPlayer = p; }
+      });
+      if (closestPlayer && ability.statusEffect) {
+        this.applyStatusEffect((closestPlayer as PlayerState).id, ability.statusEffect, monsterId);
+      }
+    } else if (abilityId === 'treant_summon_saplings') {
+      // Spawn 2 saplings near the boss
+      for (let i = 0; i < 2; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 3 + Math.random() * 2;
+        const pos = {
+          x: monster.position.x + Math.cos(angle) * dist,
+          y: 0,
+          z: monster.position.z + Math.sin(angle) * dist,
+        };
+        this.spawnMonster('forest_sapling', pos, 0);
+      }
+    }
+  }
+
+  private spawnMonster(defId: string, pos: { x: number; y: number; z: number }, respawnTime: number): string {
+    const def = MONSTER_DEFS[defId];
+    if (!def) return '';
+
+    const id = `monster_${this.monsterIdx++}`;
+    const monster = new MonsterState();
+    monster.id = id;
+    monster.defId = defId;
+    monster.position = new Vec3State();
+    monster.position.x = pos.x;
+    monster.position.y = pos.y;
+    monster.position.z = pos.z;
+    monster.hp = def.hp;
+    monster.maxHp = def.hp;
+    monster.aiState = 'idle';
+    this.state.monsters.set(id, monster);
+
+    this.monsterRuntimes.set(id, {
+      defId,
+      spawnPos: { ...pos },
+      attackTimer: 0,
+      respawnTimer: 0,
+      respawnTime,
+      dead: false,
+      currentPhase: 0,
+    });
+
+    return id;
+  }
+
+  private spawnProjectile(sourceId: string, fromPos: { x: number; y: number; z: number }, targetPos: { x: number; y: number; z: number }, damage: number, speed: number, statusEffect?: StatusEffectDef) {
+    const dx = targetPos.x - fromPos.x;
+    const dz = targetPos.z - fromPos.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist < 0.1) return;
+
+    const id = `proj_${this.projectileIdx++}`;
+    const vx = (dx / dist) * speed;
+    const vz = (dz / dist) * speed;
+
+    this.projectiles.set(id, {
+      id,
+      sourceId,
+      position: { x: fromPos.x, y: 1, z: fromPos.z },
+      velocity: { x: vx, y: 0, z: vz },
+      damage,
+      lifetime: 3,
+      statusEffect,
+      hitRadius: 0.8,
+    });
+
+    this.broadcast('projectile_spawn', {
+      id, x: fromPos.x, y: 1, z: fromPos.z,
+      vx, vy: 0, vz, type: 'nature_bolt',
+    });
+  }
+
   private gameTick(dt: number) {
     this.state.monsters.forEach((monster, id) => {
       const runtime = this.monsterRuntimes.get(id);
@@ -637,22 +934,108 @@ export class DungeonRoom extends Room<DungeonState> {
         return;
       }
 
-      if (closestDist <= def.attackRange) {
+      // Check monster abilities
+      const now = Date.now();
+      if (def.abilities && closestDist <= def.aggroRange) {
+        let abilCDs = this.monsterAbilityCooldowns.get(id);
+        if (!abilCDs) {
+          abilCDs = new Map();
+          this.monsterAbilityCooldowns.set(id, abilCDs);
+        }
+
+        // Filter abilities by current boss phase
+        const availableAbilities = def.isBoss && def.phases
+          ? def.abilities.filter((a) => def.phases![runtime.currentPhase]?.abilities.includes(a.id))
+          : def.abilities;
+
+        for (const ability of availableAbilities) {
+          const cdExpiry = abilCDs.get(ability.id) || 0;
+          if (now < cdExpiry) continue;
+          if (closestDist > ability.range && ability.type !== 'summon') continue;
+
+          // Use ability
+          abilCDs.set(ability.id, now + ability.cooldown * 1000);
+
+          if (def.isBoss) {
+            this.executeBossAbility(id, monster, runtime, ability.id);
+          } else if (ability.type === 'ranged' && ability.projectileSpeed) {
+            this.spawnProjectile(
+              id,
+              { x: monster.position.x, y: 1, z: monster.position.z },
+              { x: closestPlayer.position.x, y: 1, z: closestPlayer.position.z },
+              ability.damage, ability.projectileSpeed, ability.statusEffect,
+            );
+          } else if (ability.type === 'melee' && ability.statusEffect && closestDist <= ability.range) {
+            this.applyStatusEffect(closestPlayer.id, ability.statusEffect, id);
+          } else if (ability.type === 'aoe' && ability.statusEffect && closestDist <= ability.range) {
+            // AoE poison etc - apply to all nearby players
+            this.state.players.forEach((p) => {
+              if (p.stats.hp <= 0) return;
+              const d = distanceXZ(
+                { x: monster.position.x, y: 0, z: monster.position.z },
+                { x: p.position.x, y: 0, z: p.position.z },
+              );
+              if (d <= ability.range && ability.statusEffect) {
+                this.applyStatusEffect(p.id, ability.statusEffect, id);
+              }
+            });
+          }
+          break; // Only use one ability per tick
+        }
+      }
+
+      // Ranged AI: kiting behavior for ranged monsters
+      const isRanged = def.attackRange >= 8;
+      const moveSpeed = def.isBoss && def.phases && def.phases[runtime.currentPhase]
+        ? def.speed * def.phases[runtime.currentPhase].speedMultiplier
+        : def.speed;
+
+      if (isRanged && closestDist < 4 && closestDist > 0.1) {
+        // Too close - back away
+        monster.aiState = 'chase';
+        monster.animation = 'run';
+        const dx = monster.position.x - closestPlayer.position.x;
+        const dz = monster.position.z - closestPlayer.position.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > 0.1) {
+          monster.position.x += (dx / dist) * moveSpeed * dt;
+          monster.position.z += (dz / dist) * moveSpeed * dt;
+          monster.rotation = Math.atan2(-dx, -dz);
+        }
+      } else if (closestDist <= def.attackRange) {
         monster.aiState = 'attack';
         monster.animation = 'attack';
         if (runtime.attackTimer <= 0) {
           runtime.attackTimer = def.attackCooldown;
-          const damage = Math.max(1, def.damage - closestPlayer.stats.armor);
-          closestPlayer.stats.hp -= damage;
-          this.broadcast('damage', {
-            targetId: closestPlayer.id,
-            amount: damage,
-            isCrit: false,
-          });
-          if (closestPlayer.stats.hp <= 0) {
-            closestPlayer.stats.hp = 0;
-            closestPlayer.animation = 'death';
-            this.broadcast('player_died', { playerId: closestPlayer.id });
+
+          if (isRanged) {
+            // Ranged attack is handled via abilities/projectiles above, just face target
+            const dx = closestPlayer.position.x - monster.position.x;
+            const dz = closestPlayer.position.z - monster.position.z;
+            monster.rotation = Math.atan2(dx, dz);
+          } else {
+            // Melee attack with crit/dodge
+            let baseDmg = def.damage;
+            if (def.isBoss && def.phases && def.phases[runtime.currentPhase]) {
+              baseDmg = Math.floor(baseDmg * def.phases[runtime.currentPhase].damageMultiplier);
+            }
+            const result = calculateDamage(baseDmg, 0, closestPlayer.stats.armor, closestPlayer.stats.dexterity);
+            if (result.isDodge) {
+              this.broadcast('damage', { targetId: closestPlayer.id, amount: 0, isCrit: false, isDodge: true });
+            } else {
+              closestPlayer.stats.hp -= result.finalDamage;
+              this.broadcast('damage', {
+                targetId: closestPlayer.id,
+                amount: result.finalDamage,
+                isCrit: result.isCrit,
+                isDodge: false,
+              });
+              if (closestPlayer.stats.hp <= 0) {
+                closestPlayer.stats.hp = 0;
+                closestPlayer.animation = 'death';
+                this.broadcast('player_died', { playerId: closestPlayer.id });
+              }
+            }
           }
         }
       } else if (closestDist <= def.aggroRange) {
@@ -663,8 +1046,8 @@ export class DungeonRoom extends Room<DungeonState> {
         const dz = closestPlayer.position.z - monster.position.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
         if (dist > 0.1) {
-          monster.position.x += (dx / dist) * def.speed * dt;
-          monster.position.z += (dz / dist) * def.speed * dt;
+          monster.position.x += (dx / dist) * moveSpeed * dt;
+          monster.position.z += (dz / dist) * moveSpeed * dt;
           monster.rotation = Math.atan2(dx, dz);
         }
       } else {
@@ -697,6 +1080,113 @@ export class DungeonRoom extends Room<DungeonState> {
         );
       }
     });
+
+    // Process status effects (DOTs)
+    this.playerStatusEffects.forEach((effects, playerId) => {
+      const player = this.state.players.get(playerId);
+      if (!player || player.stats.hp <= 0) {
+        this.playerStatusEffects.delete(playerId);
+        return;
+      }
+
+      for (let i = effects.length - 1; i >= 0; i--) {
+        const effect = effects[i];
+        effect.remainingDuration -= dt;
+
+        if (effect.remainingDuration <= 0) {
+          effects.splice(i, 1);
+          continue;
+        }
+
+        // Tick damage
+        if (effect.damagePerTick > 0 && effect.tickRate > 0) {
+          effect.tickTimer += dt;
+          if (effect.tickTimer >= effect.tickRate) {
+            effect.tickTimer -= effect.tickRate;
+            player.stats.hp -= effect.damagePerTick;
+            this.broadcast('damage', {
+              targetId: playerId,
+              amount: effect.damagePerTick,
+              isCrit: false,
+              isDodge: false,
+              dotType: effect.type,
+            });
+            if (player.stats.hp <= 0) {
+              player.stats.hp = 0;
+              player.animation = 'death';
+              this.broadcast('player_died', { playerId });
+            }
+          }
+        }
+      }
+
+      if (effects.length === 0) {
+        this.playerStatusEffects.delete(playerId);
+      }
+    });
+
+    // Boss phase transitions
+    this.state.monsters.forEach((monster, id) => {
+      const runtime = this.monsterRuntimes.get(id);
+      if (!runtime || runtime.dead || monster.hp <= 0) return;
+      const def = MONSTER_DEFS[runtime.defId];
+      if (def?.isBoss) {
+        this.checkBossPhaseTransition(id, monster, runtime);
+      }
+    });
+
+    // Update projectiles
+    const projToRemove: string[] = [];
+    this.projectiles.forEach((proj, projId) => {
+      proj.position.x += proj.velocity.x * dt;
+      proj.position.y += proj.velocity.y * dt;
+      proj.position.z += proj.velocity.z * dt;
+      proj.lifetime -= dt;
+
+      if (proj.lifetime <= 0) {
+        projToRemove.push(projId);
+        return;
+      }
+
+      // Check hits against players
+      this.state.players.forEach((player) => {
+        if (player.stats.hp <= 0) return;
+        const dist = distanceXZ(
+          { x: proj.position.x, y: 0, z: proj.position.z },
+          { x: player.position.x, y: 0, z: player.position.z },
+        );
+        if (dist < proj.hitRadius) {
+          const result = calculateDamage(proj.damage, 0, player.stats.armor, player.stats.dexterity);
+          if (!result.isDodge) {
+            player.stats.hp -= result.finalDamage;
+            this.broadcast('damage', {
+              targetId: player.id,
+              amount: result.finalDamage,
+              isCrit: result.isCrit,
+              isDodge: false,
+            });
+            if (player.stats.hp <= 0) {
+              player.stats.hp = 0;
+              player.animation = 'death';
+              this.broadcast('player_died', { playerId: player.id });
+            }
+          } else {
+            this.broadcast('damage', { targetId: player.id, amount: 0, isCrit: false, isDodge: true });
+          }
+
+          if (proj.statusEffect) {
+            this.applyStatusEffect(player.id, proj.statusEffect, proj.sourceId);
+          }
+
+          projToRemove.push(projId);
+        }
+      });
+    });
+
+    for (const projId of projToRemove) {
+      this.projectiles.delete(projId);
+      this.broadcast('projectile_destroy', { id: projId });
+    }
 
     // Clear expired stuns
     const stunNow = Date.now();

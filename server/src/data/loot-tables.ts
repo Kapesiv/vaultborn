@@ -37,6 +37,18 @@ export const LOOT_TABLES: Record<string, LootTable> = {
       { itemDefId: 'health_potion', weight: 35, minRarity: 'common', maxRarity: 'common' },
     ],
   },
+  forest_shaman_loot: {
+    id: 'forest_shaman_loot',
+    guaranteedDrops: 0,
+    maxDrops: 2,
+    entries: [
+      { itemDefId: 'wood_scrap', weight: 30, minRarity: 'common', maxRarity: 'uncommon' },
+      { itemDefId: 'health_potion', weight: 30, minRarity: 'common', maxRarity: 'common' },
+      { itemDefId: 'forest_bow', weight: 10, minRarity: 'uncommon', maxRarity: 'rare' },
+      { itemDefId: 'leather_vest', weight: 15, minRarity: 'common', maxRarity: 'rare' },
+      { itemDefId: 'leather_cap', weight: 15, minRarity: 'common', maxRarity: 'uncommon' },
+    ],
+  },
   forest_treant_loot: {
     id: 'forest_treant_loot',
     guaranteedDrops: 1,

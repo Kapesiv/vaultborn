@@ -21,6 +21,33 @@ export interface MonsterSpawn {
   respawnTime: number; // seconds, 0 = no respawn
 }
 
+export interface StatusEffectDef {
+  type: 'bleed' | 'poison' | 'stun' | 'root';
+  damage: number;
+  duration: number;
+  tickRate: number;
+}
+
+export interface MonsterAbility {
+  id: string;
+  name: string;
+  type: 'melee' | 'ranged' | 'aoe' | 'debuff' | 'summon';
+  damage: number;
+  range: number;
+  cooldown: number;
+  statusEffect?: StatusEffectDef;
+  projectileSpeed?: number;
+}
+
+export interface BossPhase {
+  phase: number;
+  hpThreshold: number;
+  damageMultiplier: number;
+  speedMultiplier: number;
+  armorMultiplier: number;
+  abilities: string[];
+}
+
 export interface MonsterDef {
   id: string;
   name: string;
@@ -34,6 +61,9 @@ export interface MonsterDef {
   xpReward: number;
   lootTableId: string;
   model: string;
+  isBoss?: boolean;
+  abilities?: MonsterAbility[];
+  phases?: BossPhase[];
 }
 
 export type MonsterAIState = 'idle' | 'patrol' | 'chase' | 'attack' | 'return' | 'dead';

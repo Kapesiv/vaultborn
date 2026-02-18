@@ -17,6 +17,21 @@ export const BASIC_ATTACK_COOLDOWN = 0.8; // seconds
 export const BASIC_ATTACK_RANGE = 2.5;
 export const BASIC_ATTACK_DAMAGE = 10;
 
+// Crit
+export const BASE_CRIT_CHANCE = 0.05;
+export const CRIT_PER_DEX = 0.005;
+export const CRIT_MULTIPLIER = 1.5;
+export const MAX_CRIT_CHANCE = 0.50;
+
+// Dodge
+export const BASE_DODGE_CHANCE = 0.03;
+export const DODGE_PER_DEX = 0.003;
+export const MAX_DODGE_CHANCE = 0.30;
+
+// Potions
+export const POTION_HEAL_AMOUNT = 50;
+export const POTION_COOLDOWN = 5;
+
 // XP curve: XP needed = BASE * level^EXPONENT
 export const XP_BASE = 100;
 export const XP_EXPONENT = 1.5;

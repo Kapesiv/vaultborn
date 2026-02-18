@@ -121,6 +121,26 @@ export class InventoryService {
     return { instanceId, defId, rarity, bonusStats: stats, quantity: qty };
   }
 
+  consumeStackable(playerId: string, defId: string, amount: number = 1): boolean {
+    const db = getDB();
+    const rows = db.exec(
+      'SELECT instance_id, quantity FROM items WHERE owner_id = ? AND def_id = ?',
+      [playerId, defId],
+    );
+    if (!rows.length || !rows[0].values.length) return false;
+    const instanceId = rows[0].values[0][0] as string;
+    const qty = rows[0].values[0][1] as number;
+    if (qty < amount) return false;
+
+    if (qty <= amount) {
+      db.run('DELETE FROM items WHERE instance_id = ?', [instanceId]);
+    } else {
+      db.run('UPDATE items SET quantity = ? WHERE instance_id = ?', [qty - amount, instanceId]);
+    }
+    saveDB();
+    return true;
+  }
+
   removeItem(playerId: string, instanceId: string): boolean {
     const db = getDB();
     const rows = db.exec(

@@ -7,6 +7,7 @@ import { NetworkManager, type RoomType } from './network/NetworkManager.js';
 import { LocalPlayer, type Gender } from './entities/LocalPlayer.js';
 import { RemotePlayer } from './entities/RemotePlayer.js';
 import { MonsterEntity } from './entities/Monster.js';
+import { ProjectileEntity } from './entities/Projectile.js';
 import { LootDropEntity } from './entities/LootDrop.js';
 import { HubWorld } from './world/HubWorld.js';
 import { DungeonWorld } from './world/DungeonWorld.js';
@@ -22,10 +23,12 @@ import { mountLevelUpEffect, showLevelUp } from './ui/LevelUpEffect.js';
 import { mountSkillTreePanel, toggleSkillTreePanel, hideSkillTreePanel } from './ui/SkillTreePanel.js';
 import { mountSkillHotbar } from './ui/SkillHotbar.js';
 import { MusicSystem } from './systems/MusicSystem.js';
+import { FloatingDamageSystem } from './systems/FloatingDamageSystem.js';
 import { inventoryManager } from './systems/InventoryManager.js';
 import { skillManager } from './systems/SkillManager.js';
 import { setNetworkManager } from './network/actions.js';
 import { CLIENT_INPUT_RATE } from '@saab/shared';
+import { characterLoader } from './entities/CharacterLoader.js';
 
 export class Game {
   private renderer: Renderer;
@@ -38,11 +41,13 @@ export class Game {
   private remotePlayers = new Map<string, RemotePlayer>();
   private monsters = new Map<string, MonsterEntity>();
   private lootDrops = new Map<string, LootDropEntity>();
+  private projectiles = new Map<string, ProjectileEntity>();
 
   private hubWorld: HubWorld | null = null;
   private dungeonWorld: DungeonWorld | null = null;
   private hubFog: THREE.FogExp2 | null = null;
   private music = new MusicSystem();
+  private floatingDamage: FloatingDamageSystem | null = null;
 
   private clock = new THREE.Clock();
   private elapsedTime = 0;
@@ -160,7 +165,11 @@ export class Game {
     this.playerGender = gender;
     this.network.onMessage = (type, data) => this.handleMessage(type, data);
 
+    // Pre-load character model + animations
+    characterLoader.preload(['/models/player.fbx', '/models/erika.fbx', '/models/walk.fbx']);
+
     // Build hub world
+    this.floatingDamage = new FloatingDamageSystem(this.sceneManager.scene);
     this.hubWorld = new HubWorld(this.sceneManager.scene);
 
     const room = await this.network.joinRoom('hub', { name: playerName, gender });
@@ -215,6 +224,9 @@ export class Game {
         monster.onChange(() => {
           entity.hp = monster.hp;
           entity.maxHp = monster.maxHp;
+          if (monster.bossPhase !== undefined) {
+            entity.setBossPhase(monster.bossPhase);
+          }
         });
       });
 
@@ -254,6 +266,8 @@ export class Game {
     this.monsters.clear();
     this.lootDrops.forEach(l => l.dispose(this.sceneManager.scene));
     this.lootDrops.clear();
+    this.projectiles.forEach(p => p.dispose(this.sceneManager.scene));
+    this.projectiles.clear();
 
     // Toggle hub world
     if (this.hubWorld) {
@@ -307,7 +321,27 @@ export class Game {
 
   private handleMessage(type: string, data: any) {
     if (type === 'damage') {
-      // TODO: floating damage text
+      if (this.floatingDamage) {
+        // Find target position (monster or player)
+        let pos: THREE.Vector3 | null = null;
+        const monster = this.monsters.get(data.targetId);
+        if (monster) {
+          pos = monster.mesh.position.clone();
+        } else if (this.localPlayer && data.targetId === this.network.getSessionId()) {
+          pos = this.localPlayer.position.clone();
+        } else {
+          const remote = this.remotePlayers.get(data.targetId);
+          if (remote) pos = remote.targetPosition.clone();
+        }
+        if (pos) {
+          this.floatingDamage.spawn(pos, data.amount, {
+            isCrit: data.isCrit,
+            isDodge: data.isDodge,
+            isHeal: data.isHeal,
+            dotType: data.dotType,
+          });
+        }
+      }
     } else if (type === 'level_up') {
       showLevelUp(data.level);
     } else if (type === 'loot_acquired') {
@@ -367,6 +401,47 @@ export class Game {
       skillManager.startCooldown(data.skillId, data.cooldown);
     } else if (type === 'skill_fail') {
       console.log(`Skill failed: ${data.error}`);
+    } else if (type === 'item_used') {
+      console.log(`Used ${data.defId}, healed ${data.healAmount}`);
+    } else if (type === 'use_item_fail') {
+      console.log(`Item use failed: ${data.error}`);
+    } else if (type === 'boss_telegraph') {
+      if (this.dungeonWorld) {
+        this.dungeonWorld.showTelegraph(data.x, data.z, data.radius, data.duration);
+      }
+    } else if (type === 'boss_phase') {
+      if (this.dungeonWorld) {
+        this.dungeonWorld.setBossEnrage(data.phase);
+      }
+      // Update monster entity emissive
+      const monster = this.monsters.get(data.monsterId);
+      if (monster) {
+        monster.setBossPhase(data.phase);
+      }
+    } else if (type === 'status_effect') {
+      console.log(`Status effect: ${data.type} on ${data.targetId} for ${data.duration}s`);
+    } else if (type === 'projectile_spawn') {
+      this.spawnProjectile(data);
+    } else if (type === 'projectile_destroy') {
+      this.destroyProjectile(data.id);
+    }
+  }
+
+  private spawnProjectile(data: { id: string; x: number; y: number; z: number; vx: number; vy: number; vz: number; type: string }) {
+    const proj = new ProjectileEntity(
+      this.sceneManager.scene, data.id,
+      data.x, data.y, data.z,
+      data.vx, data.vy, data.vz,
+      data.type,
+    );
+    this.projectiles.set(data.id, proj);
+  }
+
+  private destroyProjectile(id: string) {
+    const proj = this.projectiles.get(id);
+    if (proj) {
+      proj.dispose(this.sceneManager.scene);
+      this.projectiles.delete(id);
     }
   }
 
@@ -447,6 +522,12 @@ export class Game {
     this.monsters.forEach(m => m.update(dt));
     this.lootDrops.forEach(l => l.update(dt));
 
+    // Floating damage
+    this.floatingDamage?.update(dt);
+
+    // Projectiles
+    this.projectiles.forEach(p => p.update(dt));
+
     // Camera (Fortnite-style smooth follow)
     if (this.localPlayer) {
       this.camera.update(this.localPlayer.position, dt);
@@ -498,6 +579,11 @@ export class Game {
     if (this.currentRoom === 'dungeon') {
       // Don't process gameplay input while floor cleared panel is up
       if (this.floorClearedShowing) return;
+
+      // H/5 to use health potion
+      if (this.input.consumePotionRequest()) {
+        this.network.sendMessage('use_item', { defId: 'health_potion' });
+      }
 
       // F to pick up loot
       if (this.input.isKey('KeyF')) {

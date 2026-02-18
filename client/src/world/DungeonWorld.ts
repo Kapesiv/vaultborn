@@ -309,6 +309,66 @@ export class DungeonWorld {
     }
   }
 
+  // ─── Boss telegraph (red circle on ground) ──────────────────────
+  showTelegraph(x: number, z: number, radius: number, duration: number) {
+    const geo = new THREE.CircleGeometry(radius, 32);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xff0000,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const circle = new THREE.Mesh(geo, mat);
+    circle.rotation.x = -Math.PI / 2;
+    circle.position.set(x, 0.05, z);
+    this.group.add(circle);
+
+    // Animate opacity up
+    const startTime = performance.now();
+    const animate = () => {
+      const elapsed = (performance.now() - startTime) / 1000;
+      if (elapsed >= duration) {
+        this.group.remove(circle);
+        geo.dispose();
+        mat.dispose();
+        return;
+      }
+      mat.opacity = Math.min(0.4, (elapsed / duration) * 0.6);
+      requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  }
+
+  // ─── Boss enrage visual ────────────────────────────────────────
+  setBossEnrage(phase: number) {
+    if (phase >= 2) {
+      // Phase 3: intense red + wisps turn red
+      this.scene.fog = new THREE.FogExp2(0x1a0505, 0.045);
+      this.ambientLight.color.setHex(0x1a0505);
+      this.ambientLight.intensity = 0.25;
+      this.moonLight.color.setHex(0xaa2222);
+      this.moonLight.intensity = 0.7;
+      this.wisps.forEach((w, i) => {
+        (w.material as THREE.MeshBasicMaterial).color.setHex(0xff2200);
+        this.wispLights[i].color.setHex(0xff2200);
+        this.wispLights[i].intensity = 2.5;
+      });
+    } else if (phase >= 1) {
+      // Phase 2: dark reddish-brown
+      this.scene.fog = new THREE.FogExp2(0x1a0a08, 0.04);
+      this.ambientLight.color.setHex(0x1a0a08);
+      this.ambientLight.intensity = 0.3;
+      this.moonLight.color.setHex(0x886644);
+      this.moonLight.intensity = 0.6;
+      this.wisps.forEach((w, i) => {
+        (w.material as THREE.MeshBasicMaterial).color.setHex(0xff6622);
+        this.wispLights[i].color.setHex(0xff6622);
+        this.wispLights[i].intensity = 2.0;
+      });
+    }
+  }
+
   // ─── Animation loop ───────────────────────────────────────────────
   update(time: number) {
     // Will-o'-wisps float gently

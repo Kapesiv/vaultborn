@@ -4,6 +4,9 @@ export interface DamageEvent {
   amount: number;
   type: 'physical' | 'magical' | 'true';
   isCrit: boolean;
+  isDodge: boolean;
+  isHeal?: boolean;
+  dotType?: string;
   skillId?: string;
 }
 

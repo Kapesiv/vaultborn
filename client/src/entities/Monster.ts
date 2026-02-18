@@ -19,6 +19,20 @@ export class MonsterEntity {
     this.maxHp = def?.hp || 100;
   }
 
+  setBossPhase(phase: number) {
+    if (phase <= 0) return;
+    const body = this.mesh.children[0] as THREE.Mesh;
+    if (!body) return;
+    const mat = body.material as THREE.MeshStandardMaterial;
+    if (phase >= 2) {
+      mat.emissive.setHex(0xff2200);
+      mat.emissiveIntensity = 0.4;
+    } else if (phase >= 1) {
+      mat.emissive.setHex(0x884422);
+      mat.emissiveIntensity = 0.25;
+    }
+  }
+
   private createMonsterMesh(defId: string): THREE.Group {
     const group = new THREE.Group();
     let color = 0x884422;
@@ -33,6 +47,12 @@ export class MonsterEntity {
     } else if (defId === 'forest_treant') {
       color = 0x2d5a1e;
       scale = 2.0;
+    } else if (defId === 'forest_shaman') {
+      color = 0x446644;
+      scale = 0.9;
+    } else if (defId === 'forest_sapling') {
+      color = 0x3d7a2e;
+      scale = 0.5;
     }
 
     // Body (box for now - placeholder)

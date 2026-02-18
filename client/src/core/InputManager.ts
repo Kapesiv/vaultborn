@@ -10,6 +10,7 @@ export class InputManager {
   private attackQueued: string | null = null;
   private skillQueued: number | null = null; // hotbar slot 0-3
   private jumpQueued = false;
+  private potionQueued = false;
   private seq = 0;
   private touch: MobileTouchControls;
 
@@ -28,6 +29,7 @@ export class InputManager {
       if (e.code === 'Digit2') this.skillQueued = 1;
       if (e.code === 'Digit3') this.skillQueued = 2;
       if (e.code === 'Digit4') this.skillQueued = 3;
+      if (e.code === 'Digit5' || e.code === 'KeyH') this.potionQueued = true;
     });
 
     window.addEventListener('keyup', (e) => {
@@ -114,6 +116,14 @@ export class InputManager {
     this.jumpQueued = false;
 
     return input;
+  }
+
+  consumePotionRequest(): boolean {
+    if (this.potionQueued) {
+      this.potionQueued = false;
+      return true;
+    }
+    return false;
   }
 
   isPointerLocked(): boolean {
