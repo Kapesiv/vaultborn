@@ -160,6 +160,12 @@ export class CharacterController {
     if (this.mixer) {
       this.mixer.update(dt);
     }
+    // Force model to stay in place after animation update.
+    // Walk animations with root motion would otherwise move the model
+    // within its parent group, causing visible drift.
+    if (this.model) {
+      this.model.position.set(0, 0, 0);
+    }
     // If no idle animation, maintain rest pose when idle
     if (this.currentState === 'idle' && !this.getAction('idle')) {
       this.setRestPose();

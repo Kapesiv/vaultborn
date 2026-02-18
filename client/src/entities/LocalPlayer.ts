@@ -96,10 +96,15 @@ export class LocalPlayer {
    * drift) while keeping only the Y-axis bounce for a natural walk feel.
    */
   private stripRootDrift(clip: THREE.AnimationClip): void {
+    console.log(`[stripRootDrift] Clip "${clip.name}" tracks:`,
+      clip.tracks.map(t => t.name));
+    let matched = false;
     for (const track of clip.tracks) {
       const isRootPos = /hips?\.position/i.test(track.name)
         || /root\.position/i.test(track.name);
       if (!isRootPos) continue;
+      matched = true;
+      console.log(`[stripRootDrift] Stripping track: ${track.name}`);
 
       const values = track.values;
       const stride = 3; // x, y, z interleaved
@@ -123,6 +128,9 @@ export class LocalPlayer {
           }
         }
       }
+    }
+    if (!matched) {
+      console.warn('[stripRootDrift] No root position track found! Track names did not match regex.');
     }
   }
 
