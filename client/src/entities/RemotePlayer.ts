@@ -34,12 +34,7 @@ export class RemotePlayer {
         const walkClips = await characterLoader.loadAnimationClips('/models/walk.glb');
         for (const clip of walkClips) {
           clip.name = 'walk';
-          // Strip root motion so walk plays in place
-          clip.tracks = clip.tracks.filter(track => {
-            const isRootPos = /hips?\.position/i.test(track.name)
-              || /root\.position/i.test(track.name);
-            return !isRootPos;
-          });
+          this.stripRootDrift(clip);
           animations.push(clip);
         }
       } catch { /* walk anim optional */ }
@@ -47,6 +42,29 @@ export class RemotePlayer {
       this.controller.attachModel(model, animations);
     } catch (err) {
       console.error(`[RemotePlayer:${this.id}] Failed to load model:`, err);
+    }
+  }
+
+  /** Remove linear drift from root bone position, keeping oscillation. */
+  private stripRootDrift(clip: THREE.AnimationClip): void {
+    for (const track of clip.tracks) {
+      const isRootPos = /hips?\.position/i.test(track.name)
+        || /root\.position/i.test(track.name);
+      if (!isRootPos) continue;
+
+      const values = track.values;
+      const stride = 3;
+      const n = values.length / stride;
+      if (n < 2) continue;
+
+      for (let axis = 0; axis < stride; axis++) {
+        const first = values[axis];
+        const last = values[(n - 1) * stride + axis];
+        const drift = last - first;
+        for (let i = 0; i < n; i++) {
+          values[i * stride + axis] -= drift * (i / (n - 1));
+        }
+      }
     }
   }
 

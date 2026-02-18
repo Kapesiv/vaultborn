@@ -76,16 +76,10 @@ export class LocalPlayer {
         const walkClips = await characterLoader.loadAnimationClips('/models/walk.glb');
         for (const clip of walkClips) {
           clip.name = 'walk';
-          // Strip root motion: remove hip/root bone position track so the
-          // walk animation plays in place (game code handles movement)
-          clip.tracks = clip.tracks.filter(track => {
-            const isRootPos = /hips?\.position/i.test(track.name)
-              || /root\.position/i.test(track.name);
-            return !isRootPos;
-          });
+          this.stripRootDrift(clip);
           animations.push(clip);
         }
-        console.log(`[LocalPlayer] Walk animation loaded (${walkClips.length} clips, root motion stripped)`);
+        console.log(`[LocalPlayer] Walk animation loaded (${walkClips.length} clips, root drift stripped)`);
       } catch { /* walk anim optional */ }
 
       this.controller.attachModel(model, animations);
@@ -94,6 +88,35 @@ export class LocalPlayer {
       if (this.helmetType !== 'hood' && this.helmetType !== 'none') this.equipHelmet(this.helmetType);
     } catch (err) {
       console.error('[LocalPlayer] Failed to load model:', err);
+    }
+  }
+
+  /**
+   * Remove linear drift from the root bone's position track while keeping
+   * the natural oscillation (hip sway, vertical bounce). This makes the
+   * walk cycle loop perfectly in place without losing animation quality.
+   */
+  private stripRootDrift(clip: THREE.AnimationClip): void {
+    for (const track of clip.tracks) {
+      const isRootPos = /hips?\.position/i.test(track.name)
+        || /root\.position/i.test(track.name);
+      if (!isRootPos) continue;
+
+      const values = track.values;
+      const stride = 3; // x, y, z interleaved
+      const n = values.length / stride;
+      if (n < 2) continue;
+
+      // For each axis: subtract the linear ramp from first to last frame.
+      // This zeros out net displacement while preserving oscillation.
+      for (let axis = 0; axis < stride; axis++) {
+        const first = values[axis];
+        const last = values[(n - 1) * stride + axis];
+        const drift = last - first;
+        for (let i = 0; i < n; i++) {
+          values[i * stride + axis] -= drift * (i / (n - 1));
+        }
+      }
     }
   }
 
