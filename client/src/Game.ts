@@ -175,6 +175,7 @@ export class Game {
 
     const room = await this.network.joinRoom('hub', { name: playerName, gender });
     this.localPlayer = new LocalPlayer(this.sceneManager.scene, gender);
+    this.localPlayer.setWorldColliders(this.hubWorld.colliders);
     this.setupRoomListeners(room);
     this.currentRoom = 'hub';
     this.music.playHub();
@@ -303,6 +304,8 @@ export class Game {
 
     if (this.localPlayer) {
       this.localPlayer.position.set(0, roomType === 'hub' ? 0.91 : 0, roomType === 'dungeon' ? -8 : 16);
+      // Enable world colliders only in hub
+      this.localPlayer.setWorldColliders(roomType === 'hub' && this.hubWorld ? this.hubWorld.colliders : []);
     }
 
     this.currentRoom = roomType;

@@ -937,6 +937,25 @@ export class LocalPlayer {
     }
   }
 
+  // Push player out of all world colliders (rocks, lanterns, pillars, NPCs)
+  private worldColliderWalls() {
+    const playerR = 0.3; // player body radius
+    for (const c of this.worldColliders) {
+      const dx = this.position.x - c.x;
+      const dz = this.position.z - c.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      const minDist = c.r + playerR;
+      if (dist < minDist && dist > 0.001) {
+        this.position.x = c.x + (dx / dist) * minDist;
+        this.position.z = c.z + (dz / dist) * minDist;
+      }
+    }
+  }
+
+  setWorldColliders(colliders: WorldCollider[]) {
+    this.worldColliders = colliders;
+  }
+
   reconcile(serverX: number, serverZ: number, lastProcessedInput: number) {
     this.pendingInputs = this.pendingInputs.filter(i => i.seq > lastProcessedInput);
 
