@@ -19,19 +19,36 @@ defineTypes(Vec3State, {
 });
 
 export class PlayerStatsState extends Schema {
-  hp: number = 100;
-  maxHp: number = 100;
-  mana: number = 50;
-  maxMana: number = 50;
-  strength: number = 10;
-  intelligence: number = 10;
-  dexterity: number = 10;
-  vitality: number = 10;
-  armor: number = 0;
-  level: number = 1;
-  xp: number = 0;
-  xpToNext: number = 100;
-  skillPoints: number = 0;
+  declare hp: number;
+  declare maxHp: number;
+  declare mana: number;
+  declare maxMana: number;
+  declare strength: number;
+  declare intelligence: number;
+  declare dexterity: number;
+  declare vitality: number;
+  declare armor: number;
+  declare level: number;
+  declare xp: number;
+  declare xpToNext: number;
+  declare skillPoints: number;
+
+  constructor() {
+    super();
+    this.hp = 100;
+    this.maxHp = 100;
+    this.mana = 50;
+    this.maxMana = 50;
+    this.strength = 10;
+    this.intelligence = 10;
+    this.dexterity = 10;
+    this.vitality = 10;
+    this.armor = 0;
+    this.level = 1;
+    this.xp = 0;
+    this.xpToNext = 100;
+    this.skillPoints = 0;
+  }
 }
 defineTypes(PlayerStatsState, {
   hp: 'int32',

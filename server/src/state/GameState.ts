@@ -45,15 +45,28 @@ defineTypes(HubState, {
 });
 
 export class DungeonState extends Schema {
-  players = new MapSchema<PlayerState>();
-  monsters = new MapSchema<MonsterState>();
-  lootDrops = new MapSchema<LootDropState>();
-  dungeonId: string = '';
-  currentRoom: string = '';
-  currentFloor: number = 0;
-  totalFloors: number = 4;
-  floorCleared: boolean = false;
-  dungeonComplete: boolean = false;
+  declare players: MapSchema<PlayerState>;
+  declare monsters: MapSchema<MonsterState>;
+  declare lootDrops: MapSchema<LootDropState>;
+  declare dungeonId: string;
+  declare currentRoom: string;
+  declare currentFloor: number;
+  declare totalFloors: number;
+  declare floorCleared: boolean;
+  declare dungeonComplete: boolean;
+
+  constructor() {
+    super();
+    this.players = new MapSchema<PlayerState>();
+    this.monsters = new MapSchema<MonsterState>();
+    this.lootDrops = new MapSchema<LootDropState>();
+    this.dungeonId = '';
+    this.currentRoom = '';
+    this.currentFloor = 0;
+    this.totalFloors = 4;
+    this.floorCleared = false;
+    this.dungeonComplete = false;
+  }
 }
 defineTypes(DungeonState, {
   players: { map: PlayerState },
