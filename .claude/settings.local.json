@@ -34,13 +34,14 @@
       "Bash(npx:*)",
       "Bash(taskkill:*)",
       "Bash(git add:*)",
+      "Bash(git rm:*)",
       "Bash(git commit:*)",
       "Bash(git config:*)",
-      "Bash(node -e:*)",
       "Bash(git push:*)",
       "Bash(git pull:*)",
       "Bash(node:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(railway open:*)"
     ]
   }
 }

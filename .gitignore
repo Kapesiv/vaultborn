@@ -10,3 +10,6 @@ dist/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
+*.fbx
+_test_*
+test_*

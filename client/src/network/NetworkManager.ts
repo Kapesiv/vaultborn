@@ -15,16 +15,18 @@ export class NetworkManager {
   constructor() {
     const serverUrl = import.meta.env.VITE_SERVER_URL;
     if (serverUrl) {
-      // Production: connect to explicit server URL (e.g. Railway)
+      // Explicit server URL override (e.g. VITE_SERVER_URL=https://example.railway.app)
       const wsUrl = serverUrl.replace(/^http/, 'ws');
       this.client = new Client(wsUrl);
     } else {
-      // Dev: Vite runs on 5173 but game server is on 3000
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const host = window.location.hostname;
-      const isDev = window.location.port !== '3000' && window.location.port !== '';
-      const port = isDev ? '3000' : (window.location.port || (protocol === 'wss' ? '443' : '80'));
-      this.client = new Client(`${protocol}://${host}:${port}`);
+      const port = window.location.port;
+      // Dev: Vite on 5173, game server on 3000
+      const isDev = port && port !== '3000';
+      const wsHost = isDev
+        ? `${window.location.hostname}:3000`
+        : window.location.host; // host includes port only when non-standard
+      this.client = new Client(`${protocol}://${wsHost}`);
     }
   }
 

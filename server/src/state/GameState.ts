@@ -3,13 +3,24 @@ import { PlayerState } from './PlayerState.js';
 import { MonsterState } from './MonsterState.js';
 
 export class LootDropState extends Schema {
-  id: string = '';
-  itemDefId: string = '';
-  rarity: string = 'common';
-  x: number = 0;
-  y: number = 0;
-  z: number = 0;
-  despawnAt: number = 0;
+  declare id: string;
+  declare itemDefId: string;
+  declare rarity: string;
+  declare x: number;
+  declare y: number;
+  declare z: number;
+  declare despawnAt: number;
+
+  constructor() {
+    super();
+    this.id = '';
+    this.itemDefId = '';
+    this.rarity = 'common';
+    this.x = 0;
+    this.y = 0;
+    this.z = 0;
+    this.despawnAt = 0;
+  }
 }
 defineTypes(LootDropState, {
   id: 'string',
@@ -22,7 +33,12 @@ defineTypes(LootDropState, {
 });
 
 export class HubState extends Schema {
-  players = new MapSchema<PlayerState>();
+  declare players: MapSchema<PlayerState>;
+
+  constructor() {
+    super();
+    this.players = new MapSchema<PlayerState>();
+  }
 }
 defineTypes(HubState, {
   players: { map: PlayerState },

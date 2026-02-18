@@ -1,9 +1,16 @@
 import { Schema, defineTypes, MapSchema } from '@colyseus/schema';
 
 export class Vec3State extends Schema {
-  x: number = 0;
-  y: number = 0;
-  z: number = 0;
+  declare x: number;
+  declare y: number;
+  declare z: number;
+
+  constructor() {
+    super();
+    this.x = 0;
+    this.y = 0;
+    this.z = 0;
+  }
 }
 defineTypes(Vec3State, {
   x: 'float32',
@@ -43,14 +50,26 @@ defineTypes(PlayerStatsState, {
 });
 
 export class PlayerState extends Schema {
-  id: string = '';
-  name: string = '';
-  gender: string = 'male';
-  position: Vec3State = new Vec3State();
-  rotation: number = 0;
-  stats: PlayerStatsState = new PlayerStatsState();
-  animation: string = 'idle';
-  lastProcessedInput: number = 0;
+  declare id: string;
+  declare name: string;
+  declare gender: string;
+  declare position: Vec3State;
+  declare rotation: number;
+  declare stats: PlayerStatsState;
+  declare animation: string;
+  declare lastProcessedInput: number;
+
+  constructor() {
+    super();
+    this.id = '';
+    this.name = '';
+    this.gender = 'male';
+    this.position = new Vec3State();
+    this.rotation = 0;
+    this.stats = new PlayerStatsState();
+    this.animation = 'idle';
+    this.lastProcessedInput = 0;
+  }
 }
 defineTypes(PlayerState, {
   id: 'string',
