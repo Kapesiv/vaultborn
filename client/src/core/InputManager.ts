@@ -10,6 +10,7 @@ export class InputManager {
   private attackQueued: string | null = null;
   private skillQueued: number | null = null; // hotbar slot 0-3
   private jumpQueued = false;
+  private jumpForNetwork = false;
   private potionQueued = false;
   private seq = 0;
   private touch: MobileTouchControls;
@@ -23,6 +24,7 @@ export class InputManager {
       if (e.code === 'Space') {
         e.preventDefault();
         this.jumpQueued = true;
+        this.jumpForNetwork = true;
       }
       // Skill hotkeys 1-4
       if (e.code === 'Digit1') this.skillQueued = 0;
@@ -78,6 +80,12 @@ export class InputManager {
     return this.isKey('KeyW') || this.isKey('KeyS') || this.isKey('KeyA') || this.isKey('KeyD');
   }
 
+  consumeJump(): boolean {
+    const j = this.jumpQueued;
+    this.jumpQueued = false;
+    return j;
+  }
+
   consumeMouse(): { dx: number; dy: number } {
     const result = { dx: this.mouseDx, dy: this.mouseDy };
     this.mouseDx = 0;
@@ -94,7 +102,7 @@ export class InputManager {
       backward: this.isKey('KeyS') || (touchInput?.backward ?? false),
       left: this.isKey('KeyA') || (touchInput?.left ?? false),
       right: this.isKey('KeyD') || (touchInput?.right ?? false),
-      jump: this.jumpQueued,
+      jump: this.jumpForNetwork,
       rotation,
       dt,
     };
@@ -113,7 +121,7 @@ export class InputManager {
       this.skillQueued = null;
     }
 
-    this.jumpQueued = false;
+    this.jumpForNetwork = false;
 
     return input;
   }

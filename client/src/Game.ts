@@ -65,6 +65,7 @@ export class Game {
   private portalCooldown = 0; // prevent spam
   private npcCooldown = 0;
   private isMoving = false;
+  private lastReconciledSeq = -1;
   private paused = false;
   private canvas: HTMLCanvasElement;
   private floorInfo: FloorInfo | null = null;
@@ -480,25 +481,39 @@ export class Game {
     // Check movement state every frame (for smooth animations)
     this.isMoving = this.input.isMoving();
 
-    // Input (sent at fixed rate, but animations run every frame)
+    // Apply movement every render frame for smooth motion
+    if (this.localPlayer) {
+      const jump = this.input.consumeJump();
+      this.localPlayer.applyFrameMovement(
+        this.camera.getYaw(), dt,
+        this.input.isKey('KeyW'), this.input.isKey('KeyS'),
+        this.input.isKey('KeyA'), this.input.isKey('KeyD'),
+        jump,
+      );
+    }
+
+    // Send network input at fixed rate (20Hz) for server reconciliation
     this.inputTimer += dt;
     if (this.inputTimer >= this.inputInterval && this.localPlayer) {
       this.inputTimer = 0;
       const input = this.input.getInput(this.camera.getYaw(), this.inputInterval);
-      this.localPlayer.applyInput(input);
+      this.localPlayer.trackNetworkInput(input);
       this.network.sendInput(input);
     }
 
-    // Reconcile
+    // Reconcile only when server has processed new input
     const room = this.network.getRoom();
     if (room && this.localPlayer) {
       const myState = room.state.players?.get(this.network.getSessionId());
       if (myState) {
-        this.localPlayer.reconcile(
-          myState.position.x,
-          myState.position.z,
-          myState.lastProcessedInput,
-        );
+        if (myState.lastProcessedInput !== this.lastReconciledSeq) {
+          this.lastReconciledSeq = myState.lastProcessedInput;
+          this.localPlayer.reconcile(
+            myState.position.x,
+            myState.position.z,
+            myState.lastProcessedInput,
+          );
+        }
 
         this.hudState = {
           hp: myState.stats?.hp ?? 100,

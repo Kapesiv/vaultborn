@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { computeMovement, type PlayerInput } from '@saab/shared';
 import { CharacterController } from './CharacterController.js';
 import { characterLoader } from './CharacterLoader.js';
+import type { WorldCollider } from '../world/HubWorld.js';
 
 export type Gender = 'male' | 'female';
 
@@ -31,6 +32,9 @@ export class LocalPlayer {
   private killStreakTimer = 0;
   private killStreakCount = 0;
   public nameSprite: THREE.Sprite | null = null;
+
+  // World colliders (set from HubWorld)
+  private worldColliders: WorldCollider[] = [];
 
   // GLB character controller
   private controller: CharacterController;
@@ -783,8 +787,16 @@ export class LocalPlayer {
     }
   }
 
-  applyInput(input: PlayerInput) {
-    const move = computeMovement(input);
+  /** Called every render frame for smooth local movement. */
+  applyFrameMovement(
+    yaw: number, dt: number,
+    forward: boolean, backward: boolean, left: boolean, right: boolean,
+    jump: boolean,
+  ) {
+    const move = computeMovement({
+      seq: -1, forward, backward, left, right, jump: false,
+      rotation: yaw, dt,
+    });
     this.position.x += move.dx;
     this.position.z += move.dz;
 
@@ -792,15 +804,15 @@ export class LocalPlayer {
       this.targetRotation = Math.atan2(-move.dx, -move.dz);
     }
 
-    if (input.jump && this.isGrounded) {
+    if (jump && this.isGrounded) {
       this.velocityY = 8;
       this.isGrounded = false;
     }
 
     if (!this.isGrounded) {
-      this.velocityY -= 20 * input.dt;
+      this.velocityY -= 20 * dt;
     }
-    this.position.y += this.velocityY * input.dt;
+    this.position.y += this.velocityY * dt;
 
     this.isGrounded = false;
     const floorY = this.getFloorHeight();
@@ -814,7 +826,11 @@ export class LocalPlayer {
     this.altarWall();
     this.shopWall();
     this.fountainWall();
+    this.worldColliderWalls();
+  }
 
+  /** Called at 20Hz - tracks input for server reconciliation + handles attack. */
+  trackNetworkInput(input: PlayerInput) {
     this.pendingInputs.push(input);
 
     if (input.attack) {
@@ -923,22 +939,35 @@ export class LocalPlayer {
 
   reconcile(serverX: number, serverZ: number, lastProcessedInput: number) {
     this.pendingInputs = this.pendingInputs.filter(i => i.seq > lastProcessedInput);
-    this.position.x = serverX;
-    this.position.z = serverZ;
+
+    // Compute where reconciled position should be
+    let reconX = serverX;
+    let reconZ = serverZ;
     for (const input of this.pendingInputs) {
       const move = computeMovement(input);
-      this.position.x += move.dx;
-      this.position.z += move.dz;
+      reconX += move.dx;
+      reconZ += move.dz;
+    }
+
+    // Blend correction to avoid snapping (server and client usually agree closely)
+    const dx = reconX - this.position.x;
+    const dz = reconZ - this.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    if (dist > 3.0) {
+      // Large desync (teleport/respawn): snap immediately
+      this.position.x = reconX;
+      this.position.z = reconZ;
+    } else {
+      // Small correction: blend smoothly
+      this.position.x += dx * 0.3;
+      this.position.z += dz * 0.3;
     }
   }
 
   update(dt: number, time: number, isMoving: boolean) {
-    // ── Smooth visual interpolation ────────────────────────────────
-    const posLerp = Math.min(1, dt * 18);
-    this.visualPos.x += (this.position.x - this.visualPos.x) * posLerp;
-    this.visualPos.y += (this.position.y - this.visualPos.y) * posLerp;
-    this.visualPos.z += (this.position.z - this.visualPos.z) * posLerp;
-    this.mesh.position.copy(this.visualPos);
+    // Position updates every frame now (via applyFrameMovement), copy directly
+    this.mesh.position.copy(this.position);
 
     // Smooth rotation with shortest-path angle wrapping
     let angleDiff = this.targetRotation - this.visualRot;

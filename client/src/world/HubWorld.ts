@@ -90,6 +90,12 @@ function applyBoneWeathering(geo: THREE.BufferGeometry, params: {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 }
 
+export interface WorldCollider {
+  x: number;
+  z: number;
+  r: number;
+}
+
 export class HubWorld {
   public group: THREE.Group;
 
@@ -98,6 +104,9 @@ export class HubWorld {
   public pvpArenaPosition = new THREE.Vector3(15, 0, -8);
   public cavePosition = new THREE.Vector3(0, 0, -25);
   public npcPositions: { name: string; position: THREE.Vector3; dialog: string[] }[] = [];
+
+  // Circle colliders for world objects (rocks, lanterns, pillars, NPCs)
+  public colliders: WorldCollider[] = [];
 
   // Cave entrance data (animations handled by named objects)
 
@@ -1112,15 +1121,14 @@ export class HubWorld {
     // Back curved wall
     for (let i = -3; i <= 3; i++) {
       const angle = (i / 3) * 0.8;
+      const px = pos.x + Math.sin(angle) * 6;
+      const pz = pos.z - Math.cos(angle) * 6;
       const pillarGeo = new THREE.CylinderGeometry(0.5, 0.6, 6, 8);
       const pillar = new THREE.Mesh(pillarGeo, wallMat);
-      pillar.position.set(
-        pos.x + Math.sin(angle) * 6,
-        3,
-        pos.z - Math.cos(angle) * 6,
-      );
+      pillar.position.set(px, 3, pz);
       pillar.castShadow = true;
       this.group.add(pillar);
+      this.colliders.push({ x: px, z: pz, r: 0.6 });
     }
 
     // Arena floor
@@ -1138,11 +1146,13 @@ export class HubWorld {
     gateLeft.position.set(pos.x - 1.5, 2, pos.z + 5);
     gateLeft.castShadow = true;
     this.group.add(gateLeft);
+    this.colliders.push({ x: pos.x - 1.5, z: pos.z + 5, r: 0.4 });
 
     const gateRight = new THREE.Mesh(new THREE.BoxGeometry(0.6, 4, 0.6), gateMat);
     gateRight.position.set(pos.x + 1.5, 2, pos.z + 5);
     gateRight.castShadow = true;
     this.group.add(gateRight);
+    this.colliders.push({ x: pos.x + 1.5, z: pos.z + 5, r: 0.4 });
 
     const gateTop = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.6, 0.6), gateMat);
     gateTop.position.set(pos.x, 4.3, pos.z + 5);
@@ -2052,6 +2062,7 @@ export class HubWorld {
         position: npc.position,
         dialog: npc.dialog,
       });
+      this.colliders.push({ x: npc.position.x, z: npc.position.z, r: 0.5 });
     }
   }
 
@@ -2818,6 +2829,7 @@ export class HubWorld {
     ];
     for (const [x, z] of lanternPositions) {
       this.createLantern(x, z);
+      this.colliders.push({ x, z, r: 0.3 });
     }
 
   }
@@ -3050,7 +3062,7 @@ export class HubWorld {
       }
     }
 
-    // Build meshes
+    // Build meshes and register colliders
     for (const cfg of rockConfigs) {
       const geo = makeRockGeo(cfg.size);
       const rock = new THREE.Mesh(geo, rockMat);
@@ -3064,6 +3076,9 @@ export class HubWorld {
       rock.castShadow = true;
       rock.receiveShadow = true;
       this.group.add(rock);
+
+      // Register collision - use size * scaleXZ as radius
+      this.colliders.push({ x: cfg.x, z: cfg.z, r: cfg.size * cfg.scaleXZ });
     }
   }
 
