@@ -23,20 +23,24 @@ export class RemotePlayer {
 
     scene.add(this.mesh);
 
-    // Load character model — try player.fbx, fall back to erika.fbx
-    this.loadModel(id);
+    this.loadModel();
   }
 
-  private async loadModel(id: string) {
-    const urls = ['/models/player.fbx', '/models/erika.fbx'];
-    for (const url of urls) {
+  private async loadModel() {
+    try {
+      const { scene: model, animations } = await characterLoader.getClone('/models/player.glb');
+
       try {
-        const { scene: model, animations } = await characterLoader.getClone(url);
-        this.controller.attachModel(model, animations);
-        return;
-      } catch (err) {
-        console.error(`[RemotePlayer:${id}] Failed ${url}:`, err);
-      }
+        const walkClips = await characterLoader.loadAnimationClips('/models/walk.glb');
+        for (const clip of walkClips) {
+          clip.name = 'walk';
+          animations.push(clip);
+        }
+      } catch { /* walk anim optional */ }
+
+      this.controller.attachModel(model, animations);
+    } catch (err) {
+      console.error(`[RemotePlayer:${this.id}] Failed to load model:`, err);
     }
   }
 

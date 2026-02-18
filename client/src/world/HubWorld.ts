@@ -113,7 +113,7 @@ export class HubWorld {
     this.buildNPCs();
     this.buildSpawnAltar();
     this.buildDecorations();
-    this.buildRocks();
+
     this.buildLighting();
 
     scene.add(this.group);
@@ -173,7 +173,7 @@ export class HubWorld {
 
     const paths = [
       { from: [0, 0], to: [0, -30], width: 3 },    // North to portal
-      { from: [0, 0], to: [-15, -5], width: 2.5 },  // West to shop
+
       { from: [0, 0], to: [18, -8], width: 2.5 },   // East to PvP
       { from: [0, 0], to: [0, 15], width: 2.5 },    // South spawn
     ];
@@ -275,6 +275,124 @@ export class HubWorld {
       pathMesh.receiveShadow = true;
       pathMesh.castShadow = true;
       this.group.add(pathMesh);
+    }
+
+    // ── Curved cobblestone path to shop ──────────────────────────────────
+    {
+      const shopPathWidth = 2.5;
+      const shopCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0, 0, 0),          // fountain center
+        new THREE.Vector3(-6, 0, -0.5),      // head west
+        new THREE.Vector3(-12, 0, -2),       // between the two lanterns
+        new THREE.Vector3(-12, 0, -5),       // arrive at shop heading south
+      ], false, 'catmullrom', 0.5);
+
+      const segsAlong = 50;
+      const segsAcross = Math.max(12, Math.floor(shopPathWidth * 8));
+      const totalLen = shopCurve.getLength();
+      const vtxCount = (segsAlong + 1) * (segsAcross + 1);
+      const posArr = new Float32Array(vtxCount * 3);
+      const colArr = new Float32Array(vtxCount * 3);
+
+      for (let j = 0; j <= segsAlong; j++) {
+        const t = j / segsAlong;
+        const center = shopCurve.getPoint(t);
+        const tangent = shopCurve.getTangent(t);
+        // Perpendicular direction in XZ plane
+        const perp = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+        const ly = (t - 0.5) * totalLen; // local along-path coordinate
+
+        for (let k = 0; k <= segsAcross; k++) {
+          const crossT = k / segsAcross - 0.5; // -0.5 to 0.5
+          const lx = crossT * shopPathWidth;
+          const idx = j * (segsAcross + 1) + k;
+
+          const wx = center.x + perp.x * lx;
+          const wz = center.z + perp.z * lx;
+
+          // ── Cobblestone grid (same logic as straight paths) ──
+          const stoneScale = 3.2;
+          const gx = lx * stoneScale;
+          const gy = ly * stoneScale;
+          const row = Math.floor(gy);
+          const adjX = gx + (row % 2) * 0.5;
+          const cellX = adjX - Math.floor(adjX) - 0.5;
+          const cellY = gy - Math.floor(gy) - 0.5;
+          const distToCenter = Math.sqrt(cellX * cellX + cellY * cellY);
+
+          const stoneShape = smoothstepJS(0.48, 0.32, distToCenter);
+          const h = stoneShape * 0.06;
+
+          const stoneID_x = Math.floor(adjX);
+          const stoneID_y = Math.floor(gy);
+          const stoneRand = hashStone(stoneID_x, stoneID_y);
+          const heightVariation = stoneRand * 0.025;
+
+          posArr[idx * 3]     = wx;
+          posArr[idx * 3 + 1] = 0.03 + h + heightVariation;
+          posArr[idx * 3 + 2] = wz;
+
+          // ── Color ──
+          const colorVar = hashStone(stoneID_x + 50, stoneID_y + 80);
+          const colorVar2 = hashStone(stoneID_x + 120, stoneID_y + 30);
+          let r = 0.40 + colorVar * 0.18;
+          let g2 = 0.33 + colorVar * 0.14;
+          let b = 0.22 + colorVar2 * 0.10;
+
+          const groutDarken = stoneShape * 0.4 + 0.6;
+          r *= groutDarken;
+          g2 *= groutDarken;
+          b *= groutDarken;
+
+          if (stoneShape < 0.3 && colorVar2 > 0.6) {
+            g2 += 0.06;
+            r -= 0.03;
+          }
+
+          // Edge fade
+          const edgeDist = Math.abs(lx) / (shopPathWidth / 2);
+          if (edgeDist > 0.75) {
+            const fade = (edgeDist - 0.75) / 0.25;
+            const f = fade * fade;
+            r = r * (1 - f) + 0.22 * f;
+            g2 = g2 * (1 - f) + 0.40 * f;
+            b = b * (1 - f) + 0.12 * f;
+            posArr[idx * 3 + 1] = 0.03 + (h + heightVariation) * (1 - f);
+          }
+
+          colArr[idx * 3]     = r;
+          colArr[idx * 3 + 1] = g2;
+          colArr[idx * 3 + 2] = b;
+        }
+      }
+
+      // Build index buffer
+      const idxArr: number[] = [];
+      for (let j = 0; j < segsAlong; j++) {
+        for (let k = 0; k < segsAcross; k++) {
+          const a = j * (segsAcross + 1) + k;
+          const bb = a + 1;
+          const c = (j + 1) * (segsAcross + 1) + k;
+          const d = c + 1;
+          idxArr.push(a, bb, c);
+          idxArr.push(bb, d, c);
+        }
+      }
+
+      const curveGeo = new THREE.BufferGeometry();
+      curveGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+      curveGeo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+      curveGeo.setIndex(idxArr);
+      curveGeo.computeVertexNormals();
+
+      const curveMesh = new THREE.Mesh(curveGeo, new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.88,
+        metalness: 0.02,
+      }));
+      curveMesh.receiveShadow = true;
+      curveMesh.castShadow = true;
+      this.group.add(curveMesh);
     }
 
     // ── Central plaza — circular cobblestone surface ────────────────────
@@ -1483,13 +1601,14 @@ export class HubWorld {
     keel.castShadow = true;
     this.group.add(keel);
 
-    // ── d) Wings — MASSIVE, dramatic wing bones reaching high and wide ──
-    // Each wing: shoulder → humerus → elbow → forearm → wrist → 4 long finger bones
-    // Wing span ~30 units total, height ~12 units
+    // ── d) Wings — COLLAPSED, drooping down like a dead dragon ──────────
+    // Shoulder at spine level, humerus angles slightly up then everything droops.
+    // Elbow is the highest point (~3.5), forearm slopes down, wrist near ground,
+    // finger bones splay out flat on the ground — the dragon has collapsed here.
     for (const side of [-1, 1]) {
-      const wingBase = new THREE.Vector3(cp.x + side * 3.0, 1.8, cp.z - 5);
+      const wingBase = new THREE.Vector3(cp.x + side * 3.0, 1.6, cp.z - 5);
 
-      // Shoulder joint — large bulbous joint near body
+      // Shoulder joint — attached to body near spine height
       const shoulderGeo = new THREE.SphereGeometry(0.55, 8, 8);
       displaceBone(shoulderGeo, 0.06, 400 + side);
       applyBoneWeathering(shoulderGeo, { seed: 400 + side });
@@ -1498,7 +1617,7 @@ export class HubWorld {
       shoulder.castShadow = true;
       this.group.add(shoulder);
 
-      // Humerus — thick upper arm bone sweeping outward and up
+      // Humerus — angles outward and only slightly upward, collapsed posture
       const humLen = 6.0;
       const humGeo = new THREE.CylinderGeometry(0.18, 0.32, humLen, 8);
       const humPos = humGeo.attributes.position;
@@ -1515,14 +1634,14 @@ export class HubWorld {
       displaceBone(humGeo, 0.03, 405 + side);
       applyBoneWeathering(humGeo, { seed: 405 + side });
       const humerus = new THREE.Mesh(humGeo, boneMat);
-      humerus.position.set(wingBase.x + side * 2.5, wingBase.y + 3.0, wingBase.z);
-      humerus.rotation.z = side * 0.55;
-      humerus.rotation.x = 0.12;
+      humerus.position.set(wingBase.x + side * 2.5, 2.2, wingBase.z + 0.3);
+      humerus.rotation.z = side * 1.1; // Nearly horizontal, sweeping outward
+      humerus.rotation.x = 0.1;
       humerus.castShadow = true;
       this.group.add(humerus);
 
-      // Elbow joint — elevated, big knobby joint
-      const elbowPt = new THREE.Vector3(wingBase.x + side * 5.5, 6.5, wingBase.z + 0.3);
+      // Elbow joint — highest point of the collapsed wing, only ~3.5 high
+      const elbowPt = new THREE.Vector3(wingBase.x + side * 5.5, 3.5, wingBase.z + 0.5);
       const elbowGeo = new THREE.SphereGeometry(0.38, 7, 7);
       displaceBone(elbowGeo, 0.05, 410 + side);
       applyBoneWeathering(elbowGeo, { seed: 410 + side });
@@ -1531,20 +1650,20 @@ export class HubWorld {
       elbow.castShadow = true;
       this.group.add(elbow);
 
-      // Forearm (radius/ulna) — continues outward and upward to peak
+      // Forearm — droops DOWN from elbow toward the ground
       const foreLen = 7.0;
       const forearmGeo = new THREE.CylinderGeometry(0.12, 0.22, foreLen, 7);
       displaceBone(forearmGeo, 0.025, 415 + side);
       applyBoneWeathering(forearmGeo, { seed: 415 + side });
       const forearm = new THREE.Mesh(forearmGeo, boneMat);
-      forearm.position.set(elbowPt.x + side * 3.0, 9.5, elbowPt.z - 0.2);
-      forearm.rotation.z = side * 0.4;
-      forearm.rotation.x = 0.08;
+      forearm.position.set(elbowPt.x + side * 3.5, 1.8, elbowPt.z - 0.5);
+      forearm.rotation.z = side * 1.3; // Steep downward slope
+      forearm.rotation.x = -0.1;
       forearm.castShadow = true;
       this.group.add(forearm);
 
-      // Wrist joint — at peak height, wide out
-      const wristPt = new THREE.Vector3(wingBase.x + side * 9.0, 12.0, wingBase.z + 0.5);
+      // Wrist joint — near ground, far out to the side
+      const wristPt = new THREE.Vector3(wingBase.x + side * 10.0, 0.4, wingBase.z - 0.5);
       const wristGeo = new THREE.SphereGeometry(0.3, 6, 6);
       displaceBone(wristGeo, 0.04, 420 + side);
       applyBoneWeathering(wristGeo, { seed: 420 + side });
@@ -1553,23 +1672,22 @@ export class HubWorld {
       wrist.castShadow = true;
       this.group.add(wrist);
 
-      // Wing finger bones — 4 long fingers splaying outward and downward
-      // These are the most visible part of the wing!
+      // Wing finger bones — 4 long fingers splayed FLAT on ground, fanning out
       const fingerData = [
-        { len: 8.0, r: 0.10, dx: 2.0, dy: -0.5, dz: 1.5, rz: 0.15, rx: 0.1 },
-        { len: 9.5, r: 0.09, dx: 1.5, dy: -2.5, dz: 0.0, rz: 0.25, rx: 0.25 },
-        { len: 8.5, r: 0.07, dx: 0.8, dy: -4.5, dz: -1.5, rz: 0.35, rx: 0.45 },
-        { len: 6.0, r: 0.05, dx: 0.3, dy: -5.5, dz: -3.0, rz: 0.45, rx: 0.6 },
+        { len: 8.0, r: 0.10, dx: 3.0, dz: 2.5,  rz: 1.35, rx: 0.05 },
+        { len: 9.5, r: 0.09, dx: 3.5, dz: 0.5,  rz: 1.4,  rx: 0.0 },
+        { len: 8.5, r: 0.07, dx: 3.0, dz: -1.5, rz: 1.45, rx: -0.05 },
+        { len: 6.0, r: 0.05, dx: 2.0, dz: -3.5, rz: 1.5,  rx: -0.1 },
       ];
       const fingerTips: THREE.Vector3[] = [];
       for (let f = 0; f < fingerData.length; f++) {
         const fd = fingerData[f];
         const fingerGeo = new THREE.CylinderGeometry(fd.r * 0.4, fd.r, fd.len, 6);
-        // Add slight curvature to finger bones
+        // Slight natural curvature
         const fPos = fingerGeo.attributes.position;
         for (let v = 0; v < fPos.count; v++) {
           const y = fPos.getY(v);
-          fPos.setX(v, fPos.getX(v) + y * y * 0.008 * side);
+          fPos.setZ(v, fPos.getZ(v) + y * y * 0.006);
         }
         fPos.needsUpdate = true;
         fingerGeo.computeVertexNormals();
@@ -1577,78 +1695,75 @@ export class HubWorld {
         applyBoneWeathering(fingerGeo, { seed: 430 + side * 10 + f });
         const finger = new THREE.Mesh(fingerGeo, boneMat);
         const fx = wristPt.x + side * fd.dx;
-        const fy = wristPt.y + fd.dy;
+        const fy = 0.12; // Flat on ground
         const fz = wristPt.z + fd.dz;
         finger.position.set(fx, fy, fz);
-        finger.rotation.z = side * fd.rz;
+        finger.rotation.z = side * fd.rz; // Nearly horizontal
         finger.rotation.x = fd.rx;
         finger.castShadow = true;
         this.group.add(finger);
 
-        // Calculate fingertip position for membrane
-        const tipY = fy - fd.len * 0.4 * Math.cos(fd.rx);
-        const tipX = fx + side * fd.len * 0.3;
-        const tipZ = fz + fd.len * 0.3 * Math.sin(fd.rx);
-        fingerTips.push(new THREE.Vector3(tipX, tipY, tipZ));
+        // Calculate fingertip for membrane
+        const tipX = fx + side * fd.len * 0.45;
+        const tipZ = fz + fd.len * 0.15 * Math.sin(fd.rx);
+        fingerTips.push(new THREE.Vector3(tipX, 0.08, tipZ));
       }
 
-      // Wing membrane remnants — torn, translucent triangular patches between fingers
+      // Wing membrane remnants — torn, draped on ground between finger bones
       const membraneMat = new THREE.MeshBasicMaterial({
-        color: 0x2a1c0e, transparent: true, opacity: 0.12,
+        color: 0x2a1c0e, transparent: true, opacity: 0.14,
         side: THREE.DoubleSide, depthWrite: false,
       });
-      // Draw membrane between consecutive fingers
       for (let f = 0; f < fingerTips.length - 1; f++) {
         const memShape = new THREE.Shape();
-        // Triangle from wrist to two finger tips (in local space)
         memShape.moveTo(0, 0);
         const tip1 = fingerTips[f].clone().sub(wristPt);
         const tip2 = fingerTips[f + 1].clone().sub(wristPt);
-        memShape.lineTo(tip1.x, tip1.y);
-        memShape.lineTo(tip2.x, tip2.y);
+        memShape.lineTo(tip1.x, tip1.z);
+        memShape.lineTo(tip2.x, tip2.z);
         memShape.lineTo(0, 0);
 
-        // Add holes for torn effect
-        const holeSize = 0.4 + f * 0.2;
-        const hx = (tip1.x + tip2.x) * 0.35;
-        const hy = (tip1.y + tip2.y) * 0.35;
+        // Torn holes in the membrane
+        const holeSize = 0.5 + f * 0.3;
+        const hx = (tip1.x + tip2.x) * 0.33;
+        const hz = (tip1.z + tip2.z) * 0.33;
         const hole = new THREE.Path();
-        hole.moveTo(hx - holeSize, hy - holeSize * 0.6);
-        hole.bezierCurveTo(hx - holeSize * 0.3, hy + holeSize * 0.8, hx + holeSize * 0.3, hy + holeSize * 0.6, hx + holeSize, hy - holeSize * 0.3);
-        hole.bezierCurveTo(hx + holeSize * 0.5, hy - holeSize * 0.9, hx - holeSize * 0.5, hy - holeSize * 0.8, hx - holeSize, hy - holeSize * 0.6);
+        hole.moveTo(hx - holeSize, hz - holeSize * 0.5);
+        hole.bezierCurveTo(hx - holeSize * 0.2, hz + holeSize * 0.7, hx + holeSize * 0.4, hz + holeSize * 0.5, hx + holeSize, hz - holeSize * 0.2);
+        hole.bezierCurveTo(hx + holeSize * 0.3, hz - holeSize * 0.8, hx - holeSize * 0.4, hz - holeSize * 0.7, hx - holeSize, hz - holeSize * 0.5);
         memShape.holes.push(hole);
 
         const memGeo = new THREE.ShapeGeometry(memShape, 3);
         const membrane = new THREE.Mesh(memGeo, membraneMat);
-        membrane.position.copy(wristPt);
-        membrane.castShadow = true;
+        // Lay membrane flat on ground (rotate to XZ plane)
+        membrane.rotation.x = -Math.PI / 2;
+        membrane.position.set(wristPt.x, 0.06, wristPt.z);
         this.group.add(membrane);
       }
 
-      // Hanging sinew/tendon strips from wing bones (decomposed membrane)
+      // Sinew strips — hanging limply from elbow/forearm area, touching ground
       const stripMat = new THREE.MeshBasicMaterial({
         color: 0x3a2a18, transparent: true, opacity: 0.22,
         side: THREE.DoubleSide, depthWrite: false,
       });
       for (let s = 0; s < 5; s++) {
-        const stripLen = 3.0 + Math.sin(s * 2.1 + side) * 1.5;
-        const stripW = 0.15 + s * 0.02;
-        const stripGeo = new THREE.PlaneGeometry(stripW, stripLen, 1, 8);
+        const stripLen = 2.0 + Math.sin(s * 2.1 + side) * 0.8;
+        const stripW = 0.12 + s * 0.02;
+        const stripGeo = new THREE.PlaneGeometry(stripW, stripLen, 1, 6);
         const stP = stripGeo.attributes.position;
         for (let v = 0; v < stP.count; v++) {
           const y = stP.getY(v);
-          stP.setX(v, stP.getX(v) + Math.sin(y * 2.5 + s) * 0.12);
-          stP.setZ(v, Math.sin(y * 1.8 + s * 0.7) * 0.06);
+          stP.setX(v, stP.getX(v) + Math.sin(y * 3.0 + s) * 0.08);
         }
         stP.needsUpdate = true;
         const strip = new THREE.Mesh(stripGeo, stripMat);
-        // Strips hang from along the wing structure
+        // Strips drape from elbow-to-forearm area down toward ground
         const t = s / 4;
-        const hangX = wristPt.x - side * t * 4.0;
-        const hangY = wristPt.y - 2.0 - s * 1.2;
-        const hangZ = wristPt.z + 0.3 - s * 0.8;
+        const hangX = elbowPt.x + side * (t * 3.5);
+        const hangY = elbowPt.y * (1 - t) * 0.5 + 0.3;
+        const hangZ = elbowPt.z - 0.5 + s * 0.4;
         strip.position.set(hangX, hangY, hangZ);
-        strip.rotation.z = Math.sin(s * 1.4) * 0.15;
+        strip.rotation.z = Math.sin(s * 1.4) * 0.2;
         strip.name = `dragon-strip-${side > 0 ? 'R' : 'L'}-${s}`;
         this.group.add(strip);
       }
@@ -1823,18 +1938,18 @@ export class HubWorld {
       this.group.add(frag);
     }
 
-    // Mist planes — eerie green mist drifting from open mouth
+    // Mist planes — eerie green mist billowing out from the gaping mouth
     for (let i = 0; i < 5; i++) {
-      const mistGeo = new THREE.PlaneGeometry(2.5 + Math.sin(i * 1.5) * 1, 1.2 + Math.cos(i * 0.8) * 0.5);
+      const mistGeo = new THREE.PlaneGeometry(3.5 + Math.sin(i * 1.5) * 1.5, 1.5 + Math.cos(i * 0.8) * 0.6);
       const mist = new THREE.Mesh(mistGeo, new THREE.MeshBasicMaterial({
-        color: 0x44aa66, transparent: true, opacity: 0.08 + i * 0.01,
+        color: 0x44aa66, transparent: true, opacity: 0.10 + i * 0.015,
         depthWrite: false, side: THREE.DoubleSide,
       }));
       mist.name = `dragon-mist-${i}`;
       mist.position.set(
-        cp.x + Math.sin(i * 1.3) * 1.5,
-        0.5 + i * 0.3,
-        cp.z + 1.5 + Math.cos(i * 0.7) * 1.5,
+        cp.x + Math.sin(i * 1.3) * 2.0,
+        0.6 + i * 0.35,
+        cp.z + 3.0 + Math.cos(i * 0.7) * 2.0,
       );
       mist.rotation.y = i * 0.6;
       this.group.add(mist);
@@ -2802,10 +2917,15 @@ export class HubWorld {
     const isOnPath = (x: number, z: number): boolean => {
       // North path to portal
       if (Math.abs(x) < 2.5 && z < 0 && z > -30) return true;
-      // West to shop
-      const t1 = Math.max(0, Math.min(1, (x * -15 + z * -5) / (225 + 25)));
-      const px1 = -15 * t1, pz1 = -5 * t1;
-      if (Math.sqrt((x - px1) ** 2 + (z - pz1) ** 2) < 2.5) return true;
+      // West to shop (curved path — sample 10 points along curve)
+      const shopPts = [
+        [0, 0], [-2, -0.1], [-4, -0.3], [-6, -0.5],
+        [-8, -0.9], [-10, -1.4], [-11.2, -2],
+        [-12, -2.8], [-12, -3.8], [-12, -5],
+      ];
+      for (const sp of shopPts) {
+        if (Math.sqrt((x - sp[0]) ** 2 + (z - sp[1]) ** 2) < 2.5) return true;
+      }
       // East to pvp
       const t2 = Math.max(0, Math.min(1, (x * 18 + z * -8) / (324 + 64)));
       const px2 = 18 * t2, pz2 = -8 * t2;

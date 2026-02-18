@@ -62,45 +62,28 @@ export class LocalPlayer {
   }
 
   private async loadModel() {
-    // Try player.fbx first, fall back to erika.fbx
-    const urls = ['/models/player.fbx', '/models/erika.fbx'];
-    for (const url of urls) {
+    try {
+      console.log('[LocalPlayer] Loading player.glb...');
+      const { scene: model, animations } = await characterLoader.getClone('/models/player.glb');
+      console.log(`[LocalPlayer] Loaded OK, ${animations.length} anims`);
+
+      // Load walk animation from separate file
       try {
-        console.log(`[LocalPlayer] Trying to load: ${url}`);
-        const { scene: model, animations } = await characterLoader.getClone(url);
-        console.log(`[LocalPlayer] Loaded ${url} OK, ${animations.length} anims`);
-
-        // Also load walk animation from separate file
-        try {
-          const walkClips = await characterLoader.loadAnimationClips('/models/walk.fbx');
-          for (const clip of walkClips) {
-            clip.name = 'walk';
-            animations.push(clip);
-          }
-        } catch { /* walk anim optional */ }
-
-        // Also load idle from erika if model had no idle
-        const hasIdle = animations.some(c => c.name.toLowerCase().includes('idle') || c.name.toLowerCase().includes('breathing'));
-        if (!hasIdle && url !== '/models/erika.fbx') {
-          try {
-            const idleClips = await characterLoader.loadAnimationClips('/models/erika.fbx');
-            for (const clip of idleClips) {
-              clip.name = 'idle';
-              animations.push(clip);
-            }
-          } catch { /* idle anim optional */ }
+        const walkClips = await characterLoader.loadAnimationClips('/models/walk.glb');
+        for (const clip of walkClips) {
+          clip.name = 'walk';
+          animations.push(clip);
         }
+        console.log(`[LocalPlayer] Walk animation loaded (${walkClips.length} clips)`);
+      } catch { /* walk anim optional */ }
 
-        this.controller.attachModel(model, animations);
-        this.equipWeapon(this.weaponType);
-        if (this.weaponRarity !== 'common') this.setWeaponRarity(this.weaponRarity);
-        if (this.helmetType !== 'hood' && this.helmetType !== 'none') this.equipHelmet(this.helmetType);
-        return;
-      } catch (err) {
-        console.error(`[LocalPlayer] Failed ${url}:`, err);
-      }
+      this.controller.attachModel(model, animations);
+      this.equipWeapon(this.weaponType);
+      if (this.weaponRarity !== 'common') this.setWeaponRarity(this.weaponRarity);
+      if (this.helmetType !== 'hood' && this.helmetType !== 'none') this.equipHelmet(this.helmetType);
+    } catch (err) {
+      console.error('[LocalPlayer] Failed to load model:', err);
     }
-    console.error('[LocalPlayer] All model loads failed — placeholder stays');
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -390,18 +373,15 @@ export class LocalPlayer {
     newWeapon.name = 'weapon';
 
     if (this.controller.isModelLoaded) {
-      // GLB loaded: attach to hand bone with bone-space offset
       newWeapon.scale.setScalar(1.0);
       newWeapon.position.set(0, 0.05, 0);
       newWeapon.rotation.set(0, 0, 0);
       this.controller.attachWeapon(newWeapon);
     } else {
-      // Placeholder mode: just add to group root
       newWeapon.position.set(0.5, 0.5, 0);
       this.mesh.add(newWeapon);
     }
 
-    // Re-apply weapon glow
     if (this.weaponRarity !== 'common') {
       this.setWeaponRarity(this.weaponRarity);
     }
@@ -710,7 +690,6 @@ export class LocalPlayer {
   public setWeaponRarity(rarity: string) {
     this.weaponRarity = rarity;
 
-    // Remove old glow from weapon socket
     const socket = this.controller.getWeaponSocket();
     const oldGlow = socket.getObjectByName('weapon-glow');
     if (oldGlow) socket.remove(oldGlow);
@@ -743,7 +722,6 @@ export class LocalPlayer {
     glowLight.position.set(0, 0.3, 0);
     glowLight.name = 'weapon-glow-light';
 
-    // Attach glow to weapon socket (bone or fallback)
     const weapon = socket.getObjectByName('weapon');
     if (weapon) {
       weapon.add(glow);

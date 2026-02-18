@@ -165,8 +165,8 @@ export class Game {
     this.playerGender = gender;
     this.network.onMessage = (type, data) => this.handleMessage(type, data);
 
-    // Pre-load character model + animations
-    characterLoader.preload(['/models/player.fbx', '/models/erika.fbx', '/models/walk.fbx']);
+    // Pre-load character model
+    characterLoader.preload(['/models/player.glb', '/models/walk.glb']);
 
     // Build hub world
     this.floatingDamage = new FloatingDamageSystem(this.sceneManager.scene);
