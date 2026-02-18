@@ -34,6 +34,12 @@ export class RemotePlayer {
         const walkClips = await characterLoader.loadAnimationClips('/models/walk.glb');
         for (const clip of walkClips) {
           clip.name = 'walk';
+          // Strip root motion so walk plays in place
+          clip.tracks = clip.tracks.filter(track => {
+            const isRootPos = /hips?\.position/i.test(track.name)
+              || /root\.position/i.test(track.name);
+            return !isRootPos;
+          });
           animations.push(clip);
         }
       } catch { /* walk anim optional */ }

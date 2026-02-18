@@ -76,9 +76,16 @@ export class LocalPlayer {
         const walkClips = await characterLoader.loadAnimationClips('/models/walk.glb');
         for (const clip of walkClips) {
           clip.name = 'walk';
+          // Strip root motion: remove hip/root bone position track so the
+          // walk animation plays in place (game code handles movement)
+          clip.tracks = clip.tracks.filter(track => {
+            const isRootPos = /hips?\.position/i.test(track.name)
+              || /root\.position/i.test(track.name);
+            return !isRootPos;
+          });
           animations.push(clip);
         }
-        console.log(`[LocalPlayer] Walk animation loaded (${walkClips.length} clips)`);
+        console.log(`[LocalPlayer] Walk animation loaded (${walkClips.length} clips, root motion stripped)`);
       } catch { /* walk anim optional */ }
 
       this.controller.attachModel(model, animations);
