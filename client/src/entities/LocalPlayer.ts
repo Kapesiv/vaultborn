@@ -92,9 +92,8 @@ export class LocalPlayer {
   }
 
   /**
-   * Remove linear drift from the root bone's position track while keeping
-   * the natural oscillation (hip sway, vertical bounce). This makes the
-   * walk cycle loop perfectly in place without losing animation quality.
+   * Lock the root bone's X/Z position to the first frame (zero horizontal
+   * drift) while keeping only the Y-axis bounce for a natural walk feel.
    */
   private stripRootDrift(clip: THREE.AnimationClip): void {
     for (const track of clip.tracks) {
@@ -107,14 +106,21 @@ export class LocalPlayer {
       const n = values.length / stride;
       if (n < 2) continue;
 
-      // For each axis: subtract the linear ramp from first to last frame.
-      // This zeros out net displacement while preserving oscillation.
       for (let axis = 0; axis < stride; axis++) {
-        const first = values[axis];
-        const last = values[(n - 1) * stride + axis];
-        const drift = last - first;
-        for (let i = 0; i < n; i++) {
-          values[i * stride + axis] -= drift * (i / (n - 1));
+        if (axis === 1) {
+          // Y axis: keep bounce, just remove any drift
+          const first = values[axis];
+          const last = values[(n - 1) * stride + axis];
+          const drift = last - first;
+          for (let i = 0; i < n; i++) {
+            values[i * stride + axis] -= drift * (i / (n - 1));
+          }
+        } else {
+          // X and Z: lock to first frame value (no horizontal motion)
+          const first = values[axis];
+          for (let i = 1; i < n; i++) {
+            values[i * stride + axis] = first;
+          }
         }
       }
     }
