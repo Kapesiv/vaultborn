@@ -114,6 +114,17 @@ export class LocalPlayer {
         console.log(`[LocalPlayer] Crouch animation loaded (${crouchClips.length} clips)`);
       } catch { /* crouch anim optional */ }
 
+      // Load backward walk animation
+      try {
+        const walkBackClips = await characterLoader.loadAnimationClips('/models/walkback.glb');
+        for (const clip of walkBackClips) {
+          clip.name = 'walkBack';
+          this.stripRootDrift(clip);
+          animations.push(clip);
+        }
+        console.log(`[LocalPlayer] Backward walk animation loaded (${walkBackClips.length} clips)`);
+      } catch { /* walkBack anim optional */ }
+
       this.controller.attachModel(model, animations);
       this.equipWeapon(this.weaponType);
       if (this.weaponRarity !== 'common') this.setWeaponRarity(this.weaponRarity);
@@ -544,10 +555,13 @@ export class LocalPlayer {
   public equipWeapon(type: string) {
     this.weaponType = type;
 
-    // Remove old weapon from weapon socket
-    const socket = this.controller.getWeaponSocket();
-    const oldWeapon = socket.getObjectByName('weapon');
-    if (oldWeapon) socket.remove(oldWeapon);
+    // Remove old weapon from weapon socket (could be in hand or on back)
+    const handSocket = this.controller.getWeaponSocket();
+    const backSocket = this.controller.getBackSocket();
+    const oldWeaponHand = handSocket.getObjectByName('weapon');
+    if (oldWeaponHand) handSocket.remove(oldWeaponHand);
+    const oldWeaponBack = backSocket.getObjectByName('weapon');
+    if (oldWeaponBack) backSocket.remove(oldWeaponBack);
 
     const newWeapon = this.createWeaponByType(type);
     newWeapon.name = 'weapon';
@@ -870,11 +884,18 @@ export class LocalPlayer {
   public setWeaponRarity(rarity: string) {
     this.weaponRarity = rarity;
 
-    const socket = this.controller.getWeaponSocket();
-    const oldGlow = socket.getObjectByName('weapon-glow');
-    if (oldGlow) socket.remove(oldGlow);
-    const oldLight = socket.getObjectByName('weapon-glow-light');
-    if (oldLight) socket.remove(oldLight);
+    // Find weapon wherever it is (hand or back)
+    const handSocket = this.controller.getWeaponSocket();
+    const backSocket = this.controller.getBackSocket();
+    const weapon = handSocket.getObjectByName('weapon') ?? backSocket.getObjectByName('weapon');
+
+    // Clean up old glow from the weapon itself
+    if (weapon) {
+      const oldGlow = weapon.getObjectByName('weapon-glow');
+      if (oldGlow) weapon.remove(oldGlow);
+      const oldLight = weapon.getObjectByName('weapon-glow-light');
+      if (oldLight) weapon.remove(oldLight);
+    }
 
     const rarityColors: Record<string, number> = {
       'uncommon': 0x44cc44,
@@ -902,13 +923,12 @@ export class LocalPlayer {
     glowLight.position.set(0, 0.3, 0);
     glowLight.name = 'weapon-glow-light';
 
-    const weapon = socket.getObjectByName('weapon');
     if (weapon) {
       weapon.add(glow);
       weapon.add(glowLight);
     } else {
-      socket.add(glow);
-      socket.add(glowLight);
+      handSocket.add(glow);
+      handSocket.add(glowLight);
     }
   }
 
@@ -1012,6 +1032,8 @@ export class LocalPlayer {
     if (input.attack) {
       const clipDur = this.controller.getClipDuration('attack');
       this.attackAnimation = clipDur > 0 ? clipDur : 0.8;
+      // Draw weapon before swinging
+      this.controller.drawWeapon();
       this.controller.transitionTo('attack');
       this.controller.onAnimationFinished(() => {
         this.attackAnimation = 0;
@@ -1151,18 +1173,33 @@ export class LocalPlayer {
     this.mesh.rotation.y = this.visualRot;
 
     // ── Animation state transitions via CharacterController ──────
+    // Track whether weapon should be drawn (in hand) or stowed (on back)
+    let needsWeaponDrawn = false;
+
     if (this.attackAnimation > 0) {
       this.attackAnimation -= dt;
+      needsWeaponDrawn = true;
     } else if (isCrouching) {
       this.controller.transitionTo('crouch');
     } else if (isMoving && isSprinting) {
       this.controller.transitionTo('run');
+    } else if (isMoving && isMovingBackward && this.controller.hasBackwardWalk) {
+      this.controller.transitionTo('walkBack');
+      needsWeaponDrawn = true;
     } else if (isMoving) {
       this.controller.setWalkDirection(isMovingBackward);
       this.controller.transitionTo('walk');
     } else {
       this.controller.transitionTo('idle');
     }
+
+    // Draw or stow weapon based on state
+    if (needsWeaponDrawn && !this.controller.isWeaponDrawn) {
+      this.controller.drawWeapon();
+    } else if (!needsWeaponDrawn && this.controller.isWeaponDrawn) {
+      this.controller.stowWeapon();
+    }
+
     this.controller.update(dt);
 
     // ── Weapon glow pulse ────────────────────────────────────────

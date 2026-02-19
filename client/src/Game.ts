@@ -177,7 +177,7 @@ export class Game {
     this.network.onMessage = (type, data) => this.handleMessage(type, data);
 
     // Pre-load character model
-    characterLoader.preload(['/models/player.glb', '/models/walking.glb', '/models/run.glb', '/models/attack.glb', '/models/crouch.glb', '/models/viking_axe.glb']);
+    characterLoader.preload(['/models/player.glb', '/models/walking.glb', '/models/walkback.glb', '/models/run.glb', '/models/attack.glb', '/models/crouch.glb', '/models/viking_axe.glb']);
 
     // Build hub world
     this.floatingDamage = new FloatingDamageSystem(this.sceneManager.scene);

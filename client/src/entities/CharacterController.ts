@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type AnimationState = 'idle' | 'walk' | 'run' | 'crouch' | 'attack';
+export type AnimationState = 'idle' | 'walk' | 'walkBack' | 'run' | 'crouch' | 'attack';
 
 const CROSSFADE_DURATION = 0.2;
 
@@ -20,10 +20,14 @@ export class CharacterController {
   private placeholder: THREE.Mesh;
   private model: THREE.Group | null = null;
 
-  /** Weapon attachment bone (cached after first lookup). */
+  /** Weapon attachment bone - right hand (cached after first lookup). */
   private weaponBone: THREE.Bone | null = null;
+  /** Back/spine bone for stowing weapons (cached). */
+  private backBone: THREE.Bone | null = null;
   /** Head bone (cached). */
   private headBone: THREE.Bone | null = null;
+  /** Whether weapon is currently in hand (true) or stowed on back (false). */
+  private weaponDrawn = false;
 
   constructor() {
     // Wireframe placeholder visible until GLB loads
@@ -83,7 +87,7 @@ export class CharacterController {
       // Strip root motion (position tracks on Hips) so the game's
       // movement system controls position, not the animation
       const name = this.normalizeAnimName(clip.name);
-      if (name === 'walk' || name === 'run' || name === 'attack') {
+      if (name === 'walk' || name === 'walkBack' || name === 'run' || name === 'attack') {
         this.stripRootMotion(clip);
       } else if (name === 'crouch') {
         this.stripRootMotionKeepY(clip);
@@ -164,6 +168,7 @@ export class CharacterController {
 
     // Cache key bones
     this.weaponBone = this.getBone('mixamorigRightHand') ?? this.getBone('RightHand') ?? null;
+    this.backBone = this.getBone('mixamorigSpine2') ?? this.getBone('mixamorigSpine1') ?? this.getBone('Spine2') ?? null;
     this.headBone = this.getBone('mixamorigHead') ?? this.getBone('Head') ?? null;
 
     // Bring arms down from T-pose — slightly away from body
@@ -229,8 +234,17 @@ export class CharacterController {
     return action ? action.getClip().duration : 0;
   }
 
+  /** Whether backward walk should use dedicated animation or reversed forward. */
+  get hasBackwardWalk(): boolean {
+    return this.actions.has('walkBack');
+  }
+
   /** Set walk animation playback direction: -1 for backward, 1 for forward. */
   setWalkDirection(backward: boolean): void {
+    // If we have a dedicated backward walk animation, use it via transitionTo instead
+    if (this.hasBackwardWalk) return;
+
+    // Fallback: reverse the forward walk
     const walkAction = this.getAction('walk');
     if (walkAction) {
       walkAction.timeScale = backward ? -1 : 1;
@@ -258,6 +272,9 @@ export class CharacterController {
   attachWeapon(mesh: THREE.Object3D): void {
     if (this.weaponBone) {
       this.weaponBone.add(mesh);
+      this.weaponDrawn = true;
+      // Start stowed on back
+      this.stowWeapon();
     } else {
       // Fallback: attach to group root
       this.group.add(mesh);
@@ -267,6 +284,51 @@ export class CharacterController {
   /** Get the weapon bone for removing old weapons etc. */
   getWeaponSocket(): THREE.Object3D {
     return this.weaponBone ?? this.group;
+  }
+
+  /** Get the back bone for stowing weapons. */
+  getBackSocket(): THREE.Object3D {
+    return this.backBone ?? this.group;
+  }
+
+  /** Whether the weapon is currently drawn (in hand). */
+  get isWeaponDrawn(): boolean {
+    return this.weaponDrawn;
+  }
+
+  /**
+   * Move the weapon from hand to back.
+   * Repositions and reorients the weapon mesh to sit on the character's upper back.
+   */
+  stowWeapon(): void {
+    if (!this.weaponDrawn) return;
+    const weapon = this.weaponBone?.getObjectByName('weapon');
+    if (!weapon || !this.backBone) return;
+
+    this.weaponBone!.remove(weapon);
+    // Position on upper back: flat against back, axe head tilted upward
+    weapon.position.set(0.1, -0.15, -0.2);
+    weapon.rotation.set(Math.PI / 2, -Math.PI / 5, Math.PI / 4);
+    this.backBone.add(weapon);
+    this.weaponDrawn = false;
+  }
+
+  /**
+   * Move the weapon from back to hand.
+   * Restores the weapon to grip position in the right hand.
+   */
+  drawWeapon(): void {
+    if (this.weaponDrawn) return;
+    const weapon = this.backBone?.getObjectByName('weapon');
+    if (!weapon || !this.weaponBone) return;
+
+    this.backBone!.remove(weapon);
+    // Restore hand-grip position
+    weapon.position.set(0, -0.1, 0);
+    weapon.position.set(0.4, 0.2, 0.1);
+    weapon.rotation.set(Math.PI * 3 / 4, -Math.PI / 2, 0);
+    this.weaponBone.add(weapon);
+    this.weaponDrawn = true;
   }
 
   /** Attach a mesh to the head bone (helmet). */
@@ -535,6 +597,7 @@ export class CharacterController {
     const lower = name.toLowerCase();
     if (lower.includes('idle') || lower.includes('breathing')) return 'idle';
     if (lower === 'run' || lower.includes('dribble') || lower.includes('sprint')) return 'run';
+    if (lower.includes('walkback') || lower.includes('walk back') || lower.includes('walk_back')) return 'walkBack';
     if (lower.includes('walk') || lower.includes('jog')) return 'walk';
     if (lower.includes('crouch')) return 'crouch';
     if (lower.includes('attack') || lower.includes('slash') || lower.includes('swing') || lower.includes('stab')) return 'attack';
