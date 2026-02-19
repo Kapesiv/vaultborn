@@ -31,6 +31,12 @@ async function main() {
 
   await fastify.register(fastifyCors, { origin: true });
 
+  // Required for SharedArrayBuffer (WASM ONNX TTS worker)
+  fastify.addHook('onSend', async (_request, reply) => {
+    reply.header('Cross-Origin-Opener-Policy', 'same-origin');
+    reply.header('Cross-Origin-Embedder-Policy', 'require-corp');
+  });
+
   // Serve client build in production
   const clientDist = join(__dirname, '../../client/dist');
   if (existsSync(clientDist)) {
