@@ -63,9 +63,11 @@ export class NPCBrainManager {
     const stream = await this.engine.chat.completions.create({
       messages,
       stream: true,
-      temperature: 0.7,
+      temperature: 0.8,
       top_p: 0.9,
       max_tokens: 200,
+      frequency_penalty: 1.2,
+      presence_penalty: 0.6,
     });
 
     for await (const chunk of stream) {
