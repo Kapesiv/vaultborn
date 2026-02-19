@@ -405,6 +405,128 @@ export class HubWorld {
     this.group.add(innerRing);
   }
 
+  /**
+   * Build a curved cobblestone path from a set of 2D waypoints.
+   * Uses CatmullRomCurve3 and the same cobblestone vertex-color logic as straight paths.
+   */
+  private buildCurvedPath(
+    waypoints: number[][],
+    pathWidth: number,
+    hashStone: (a: number, b: number) => number,
+    smoothstep: (edge0: number, edge1: number, x: number) => number,
+  ) {
+    const curve = new THREE.CatmullRomCurve3(
+      waypoints.map(([x, z]) => new THREE.Vector3(x, 0, z)),
+      false, 'catmullrom', 0.5,
+    );
+
+    const segsAlong = 50;
+    const segsAcross = Math.max(12, Math.floor(pathWidth * 8));
+    const totalLen = curve.getLength();
+    const vtxCount = (segsAlong + 1) * (segsAcross + 1);
+    const posArr = new Float32Array(vtxCount * 3);
+    const colArr = new Float32Array(vtxCount * 3);
+
+    for (let j = 0; j <= segsAlong; j++) {
+      const t = j / segsAlong;
+      const center = curve.getPoint(t);
+      const tangent = curve.getTangent(t);
+      const perp = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+      const ly = (t - 0.5) * totalLen;
+
+      for (let k = 0; k <= segsAcross; k++) {
+        const crossT = k / segsAcross - 0.5;
+        const lx = crossT * pathWidth;
+        const idx = j * (segsAcross + 1) + k;
+
+        const wx = center.x + perp.x * lx;
+        const wz = center.z + perp.z * lx;
+
+        // Cobblestone grid
+        const stoneScale = 3.2;
+        const gx = lx * stoneScale;
+        const gy = ly * stoneScale;
+        const row = Math.floor(gy);
+        const adjX = gx + (row % 2) * 0.5;
+        const cellX = adjX - Math.floor(adjX) - 0.5;
+        const cellY = gy - Math.floor(gy) - 0.5;
+        const distToCenter = Math.sqrt(cellX * cellX + cellY * cellY);
+
+        const stoneShape = smoothstep(0.48, 0.32, distToCenter);
+        const h = stoneShape * 0.06;
+
+        const stoneID_x = Math.floor(adjX);
+        const stoneID_y = Math.floor(gy);
+        const stoneRand = hashStone(stoneID_x, stoneID_y);
+        const heightVariation = stoneRand * 0.025;
+
+        posArr[idx * 3] = wx;
+        posArr[idx * 3 + 1] = 0.28 + h + heightVariation;
+        posArr[idx * 3 + 2] = wz;
+
+        // Color
+        const colorVar = hashStone(stoneID_x + 50, stoneID_y + 80);
+        const colorVar2 = hashStone(stoneID_x + 120, stoneID_y + 30);
+        let r = 0.40 + colorVar * 0.18;
+        let g2 = 0.33 + colorVar * 0.14;
+        let b = 0.22 + colorVar2 * 0.10;
+
+        const groutDarken = stoneShape * 0.4 + 0.6;
+        r *= groutDarken;
+        g2 *= groutDarken;
+        b *= groutDarken;
+
+        if (stoneShape < 0.3 && colorVar2 > 0.6) {
+          g2 += 0.06;
+          r -= 0.03;
+        }
+
+        // Edge fade
+        const edgeDist = Math.abs(lx) / (pathWidth / 2);
+        if (edgeDist > 0.75) {
+          const fade = (edgeDist - 0.75) / 0.25;
+          const f = fade * fade;
+          r = r * (1 - f) + 0.22 * f;
+          g2 = g2 * (1 - f) + 0.40 * f;
+          b = b * (1 - f) + 0.12 * f;
+          posArr[idx * 3 + 1] = 0.28 + (h + heightVariation) * (1 - f);
+        }
+
+        colArr[idx * 3] = r;
+        colArr[idx * 3 + 1] = g2;
+        colArr[idx * 3 + 2] = b;
+      }
+    }
+
+    // Build index buffer
+    const idxArr: number[] = [];
+    for (let j = 0; j < segsAlong; j++) {
+      for (let k = 0; k < segsAcross; k++) {
+        const a = j * (segsAcross + 1) + k;
+        const bb = a + 1;
+        const c = (j + 1) * (segsAcross + 1) + k;
+        const d = c + 1;
+        idxArr.push(a, bb, c);
+        idxArr.push(bb, d, c);
+      }
+    }
+
+    const curveGeo = new THREE.BufferGeometry();
+    curveGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+    curveGeo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+    curveGeo.setIndex(idxArr);
+    curveGeo.computeVertexNormals();
+
+    const curveMesh = new THREE.Mesh(curveGeo, new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.88,
+      metalness: 0.02,
+    }));
+    curveMesh.receiveShadow = true;
+    curveMesh.castShadow = true;
+    this.group.add(curveMesh);
+  }
+
   // Collision radius for the fountain base (used by LocalPlayer)
   public static readonly FOUNTAIN_RADIUS = 3.6;
 

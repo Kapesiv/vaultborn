@@ -142,6 +142,18 @@ export class CharacterController {
       console.log('[CharacterController] Using loaded attack animation from FBX');
     }
 
+    // Crouch fallback — procedural if no FBX loaded
+    if (!this.getAction('crouch')) {
+      const crouchClip = this.createProceduralCrouch();
+      if (crouchClip) {
+        const crouchAction = this.mixer.clipAction(crouchClip);
+        this.actions.set('crouch', crouchAction);
+        console.log('[CharacterController] Created procedural crouch (fallback)');
+      }
+    } else {
+      console.log('[CharacterController] Using loaded crouch animation from FBX');
+    }
+
     // Start idle animation immediately to avoid T-pose
     const idleAction = this.getAction('idle');
     if (idleAction) {
@@ -387,6 +399,80 @@ export class CharacterController {
     }
 
     const clip = new THREE.AnimationClip('walk', duration, tracks);
+    for (const track of clip.tracks) {
+      track.setInterpolation(THREE.InterpolateSmooth);
+    }
+    return clip;
+  }
+
+  /** Procedural crouch: lower hips, bend knees, hunch spine. */
+  private createProceduralCrouch(): THREE.AnimationClip | null {
+    const hipsBone = this.getBone('mixamorigHips');
+    const spineBone = this.getBone('mixamorigSpine');
+    const leftUpLeg = this.getBone('mixamorigLeftUpLeg');
+    const rightUpLeg = this.getBone('mixamorigRightUpLeg');
+    const leftLeg = this.getBone('mixamorigLeftLeg');
+    const rightLeg = this.getBone('mixamorigRightLeg');
+    if (!hipsBone) return null;
+
+    const duration = 0.8;
+    const times = [0, 0.4, 0.8];
+    const tracks: THREE.KeyframeTrack[] = [];
+
+    // Lower hips significantly
+    const y = hipsBone.position.y;
+    const crouchY = y - 25; // lower the body (bone-local units)
+    tracks.push(new THREE.NumberKeyframeTrack(
+      `${hipsBone.name}.position[y]`,
+      times,
+      [crouchY, crouchY - 1, crouchY],
+    ));
+
+    // Hunch spine forward
+    if (spineBone) {
+      const rx = spineBone.rotation.x;
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${spineBone.name}.rotation[x]`,
+        times,
+        [rx + 0.3, rx + 0.32, rx + 0.3],
+      ));
+    }
+
+    // Bend upper legs forward (thighs)
+    const thighBend = 1.2;
+    if (leftUpLeg) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${leftUpLeg.name}.rotation[x]`,
+        times,
+        [thighBend, thighBend + 0.05, thighBend],
+      ));
+    }
+    if (rightUpLeg) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${rightUpLeg.name}.rotation[x]`,
+        times,
+        [thighBend, thighBend - 0.05, thighBend],
+      ));
+    }
+
+    // Bend knees
+    const kneeBend = -1.4;
+    if (leftLeg) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${leftLeg.name}.rotation[x]`,
+        times,
+        [kneeBend, kneeBend - 0.03, kneeBend],
+      ));
+    }
+    if (rightLeg) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${rightLeg.name}.rotation[x]`,
+        times,
+        [kneeBend, kneeBend + 0.03, kneeBend],
+      ));
+    }
+
+    const clip = new THREE.AnimationClip('crouch', duration, tracks);
     for (const track of clip.tracks) {
       track.setInterpolation(THREE.InterpolateSmooth);
     }

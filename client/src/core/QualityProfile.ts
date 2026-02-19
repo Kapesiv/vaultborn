@@ -36,7 +36,7 @@ const MOBILE_PROFILE: QualitySettings = {
   bloom: false,
   smaa: false,
   shadowType: 'basic',
-  farPlane: 100,
+  farPlane: 150,
   shadowExtent: 30,
 };
 

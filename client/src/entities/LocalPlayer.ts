@@ -1015,7 +1015,7 @@ export class LocalPlayer {
       this.controller.transitionTo('attack');
       this.controller.onAnimationFinished(() => {
         this.attackAnimation = 0;
-        this.controller.transitionTo('idle');
+        // Don't force idle — let the update loop decide (could be crouch, walk, etc.)
       });
     }
   }
