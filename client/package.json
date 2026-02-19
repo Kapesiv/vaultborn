@@ -11,7 +11,6 @@
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.81",
     "colyseus.js": "^0.15.0",
-    "kokoro-js": "^1.2.1",
     "preact": "^10.25.0",
     "three": "^0.172.0"
   },

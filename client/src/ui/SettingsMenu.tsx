@@ -1,5 +1,6 @@
 import { render, h } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
+import type { AIStatus } from '../ai/NPCAIManager';
 
 // ── Persistent settings store ──────────────────────────────────
 const STORAGE_KEY = 'vaultborn_settings';
@@ -42,15 +43,27 @@ export function getSavedSettings(): GameSettings {
 interface SettingsMenuState {
   visible: boolean;
   settings: GameSettings;
+  aiStatus: AIStatus;
+  aiProgress: number;
+  aiProgressText: string;
 }
 
 let setMenuState: ((s: Partial<SettingsMenuState>) => void) | null = null;
-let currentState: SettingsMenuState = { visible: false, settings: loadSettings() };
+let currentState: SettingsMenuState = {
+  visible: false,
+  settings: loadSettings(),
+  aiStatus: 'idle',
+  aiProgress: 0,
+  aiProgressText: '',
+};
 
 function SettingsMenuComponent() {
   const [state, setState] = useState<SettingsMenuState>({
     visible: false,
     settings: loadSettings(),
+    aiStatus: 'idle',
+    aiProgress: 0,
+    aiProgressText: '',
   });
 
   setMenuState = (partial) => {
@@ -174,6 +187,54 @@ function SettingsMenuComponent() {
             </div>
           </div>
 
+          {/* AI Brain section */}
+          <div style={{
+            width: '100%',
+            borderTop: '1px solid rgba(255,215,0,0.3)',
+            paddingTop: '14px',
+            marginTop: '4px',
+          }}>
+            {state.aiStatus === 'idle' && (
+              <button
+                style={btnStyle}
+                onClick={() => onDownloadAI?.()}
+              >
+                Download AI Brain
+              </button>
+            )}
+
+            {state.aiStatus === 'loading' && (
+              <div style={{ width: '100%' }}>
+                <div style={{ color: '#ccc', fontSize: '13px', marginBottom: '6px', textAlign: 'left' }}>
+                  AI Brain: {state.aiProgressText || 'Loading...'}
+                </div>
+                <div style={{
+                  background: 'rgba(255,255,255,0.1)',
+                  borderRadius: '4px',
+                  height: '8px',
+                  overflow: 'hidden',
+                }}>
+                  <div style={{
+                    background: '#ffd700',
+                    height: '100%',
+                    width: `${Math.round(state.aiProgress * 100)}%`,
+                    borderRadius: '4px',
+                    transition: 'width 0.3s',
+                  }} />
+                </div>
+                <div style={{ color: '#888', fontSize: '12px', marginTop: '6px' }}>
+                  {Math.round(state.aiProgress * 100)}% - First time download, cached for future visits
+                </div>
+              </div>
+            )}
+
+            {state.aiStatus === 'ready' && (
+              <div style={{ color: '#4caf50', fontSize: '14px', fontWeight: 'bold' }}>
+                AI Brain: Ready
+              </div>
+            )}
+          </div>
+
           <button
             style={btnStyle}
             onClick={() => hideSettings()}
@@ -194,6 +255,8 @@ let onSoundToggle: ((muted: boolean) => void) | null = null;
 let onVolumeChange: ((volume: number) => void) | null = null;
 let onSensitivityChange: ((sensitivity: number) => void) | null = null;
 let onResume: (() => void) | null = null;
+let onDownloadAI: (() => void) | null = null;
+let getAIStatus: (() => AIStatus) | null = null;
 
 export function mountSettingsMenu(
   container: HTMLElement,
@@ -202,12 +265,16 @@ export function mountSettingsMenu(
     onVolumeChange: (volume: number) => void;
     onSensitivityChange: (sensitivity: number) => void;
     onResume: () => void;
+    onDownloadAI: () => void;
+    getAIStatus: () => AIStatus;
   },
 ) {
   onSoundToggle = callbacks.onSoundToggle;
   onVolumeChange = callbacks.onVolumeChange;
   onSensitivityChange = callbacks.onSensitivityChange;
   onResume = callbacks.onResume;
+  onDownloadAI = callbacks.onDownloadAI;
+  getAIStatus = callbacks.getAIStatus;
   const div = document.createElement('div');
   div.id = 'settings-menu-root';
   container.appendChild(div);
@@ -215,7 +282,8 @@ export function mountSettingsMenu(
 }
 
 export function showSettings() {
-  setMenuState?.({ visible: true });
+  const status = getAIStatus?.() ?? 'idle';
+  setMenuState?.({ visible: true, aiStatus: status });
 }
 
 export function hideSettings() {
@@ -225,4 +293,12 @@ export function hideSettings() {
 
 export function isSettingsOpen(): boolean {
   return currentState.visible;
+}
+
+export function updateAIStatus(status: AIStatus, progress?: number, text?: string) {
+  setMenuState?.({
+    aiStatus: status,
+    ...(progress !== undefined ? { aiProgress: progress } : {}),
+    ...(text !== undefined ? { aiProgressText: text } : {}),
+  });
 }

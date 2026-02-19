@@ -11,7 +11,6 @@ interface AINPCDialogState {
   visible: boolean;
   npcName: string;
   messages: ChatMessage[];
-  speaking: boolean;
   inputEnabled: boolean;
 }
 
@@ -19,7 +18,6 @@ const INITIAL_STATE: AINPCDialogState = {
   visible: false,
   npcName: '',
   messages: [],
-  speaking: false,
   inputEnabled: true,
 };
 
@@ -84,11 +82,6 @@ function AINPCDialogComponent() {
       }}>
         <div style={{ color: '#ffd700', fontSize: '16px', fontWeight: 'bold' }}>
           {state.npcName}
-          {state.speaking && (
-            <span style={{ color: '#aaa', fontSize: '12px', marginLeft: '8px', fontWeight: 'normal' }}>
-              speaking...
-            </span>
-          )}
         </div>
         <div style={{ color: '#888', fontSize: '12px' }}>ESC to close</div>
       </div>
@@ -193,7 +186,6 @@ export function showAINPCDialog(npcName: string, greeting: string, sendHandler: 
     visible: true,
     npcName,
     messages,
-    speaking: false,
     inputEnabled: true,
   }));
 }
@@ -247,8 +239,4 @@ export function finishNPCStreaming() {
     }
     return { ...s, messages: msgs, inputEnabled: true };
   });
-}
-
-export function setSpeaking(speaking: boolean) {
-  setState?.((s) => ({ ...s, speaking }));
 }

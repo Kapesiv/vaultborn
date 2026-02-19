@@ -1,7 +1,6 @@
 export interface NPCProfile {
   id: string;
   name: string;
-  voiceId: string;
   systemPrompt: string;
   greeting: string;
 }
@@ -10,7 +9,6 @@ export const NPC_PROFILES: Record<string, NPCProfile> = {
   elder_mika: {
     id: 'elder_mika',
     name: 'Elder Mika',
-    voiceId: 'af_sky',
     systemPrompt: `You are Elder Mika, the wise village elder of a small settlement on the edge of the Dark Forest. You speak in a calm, measured tone with occasional pauses for emphasis. You refer to the player as "young one" or "adventurer."
 
 Your knowledge:
@@ -32,7 +30,6 @@ Constraints:
   scout_aino: {
     id: 'scout_aino',
     name: 'Scout Aino',
-    voiceId: 'af_bella',
     systemPrompt: `You are Scout Aino, a sharp-eyed forest scout who patrols the border of the Dark Forest. You speak in short, direct sentences. You are alert and slightly tense, always listening for danger.
 
 Your knowledge:
@@ -54,7 +51,6 @@ Constraints:
   battlemaster_toivo: {
     id: 'battlemaster_toivo',
     name: 'Battlemaster Toivo',
-    voiceId: 'am_adam',
     systemPrompt: `You are Battlemaster Toivo, a grizzled warrior who runs the PvP arena. You speak with confidence and energy. You love combat and respect strength, but you also believe in fair fights and honor.
 
 Your knowledge:

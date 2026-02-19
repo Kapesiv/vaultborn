@@ -31,7 +31,7 @@ import { CLIENT_INPUT_RATE } from '@saab/shared';
 import { characterLoader } from './entities/CharacterLoader.js';
 import { NPCAIManager } from './ai/NPCAIManager.js';
 import { mountAINPCDialog, hideAINPCDialog as hideAIDialog } from './ai/ui/AINPCDialog.js';
-import { mountAILoadingOverlay } from './ai/ui/AILoadingOverlay.js';
+import { updateAIStatus } from './ui/SettingsMenu.js';
 
 export class Game {
   private renderer: Renderer;
@@ -105,6 +105,15 @@ export class Game {
         this.camera.setSensitivity(sensitivity);
       },
       onResume: () => this.unpause(),
+      onDownloadAI: () => {
+        updateAIStatus('loading', 0, 'Starting...');
+        this.npcAI.loadModel((progress, text) => {
+          updateAIStatus('loading', progress, text);
+        }).then((success) => {
+          updateAIStatus(success ? 'ready' : 'idle');
+        });
+      },
+      getAIStatus: () => this.npcAI.getStatus(),
     });
 
     // Apply non-audio saved settings (audio applied after music starts)
@@ -127,7 +136,6 @@ export class Game {
     mountSkillTreePanel(uiOverlay);
     mountSkillHotbar(uiOverlay);
     mountAINPCDialog(uiOverlay);
-    mountAILoadingOverlay(uiOverlay);
 
     // ESC to close panels / toggle pause
     window.addEventListener('keydown', (e) => {
@@ -191,9 +199,6 @@ export class Game {
     // Build hub world
     this.floatingDamage = new FloatingDamageSystem(this.sceneManager.scene);
     this.hubWorld = new HubWorld(this.sceneManager.scene);
-
-    // Start loading AI models in background so they're ready when player reaches an NPC
-    this.npcAI.preload();
 
     const room = await this.network.joinRoom('hub', { name: playerName, gender });
     this.localPlayer = new LocalPlayer(this.sceneManager.scene, gender);
