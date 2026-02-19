@@ -1,5 +1,5 @@
 import type { PlayerInput } from '../types/player.js';
-import { PLAYER_SPEED } from '../constants/game.js';
+import { PLAYER_SPEED, PLAYER_SPRINT_SPEED } from '../constants/game.js';
 
 export function validatePlayerInput(input: PlayerInput): boolean {
   if (typeof input.seq !== 'number' || input.seq < 0) return false;
@@ -39,8 +39,9 @@ export function computeMovement(input: PlayerInput): { dx: number; dz: number } 
     dz /= len;
   }
 
+  const speed = input.sprint ? PLAYER_SPRINT_SPEED : PLAYER_SPEED;
   return {
-    dx: dx * PLAYER_SPEED * input.dt,
-    dz: dz * PLAYER_SPEED * input.dt,
+    dx: dx * speed * input.dt,
+    dz: dz * speed * input.dt,
   };
 }

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { downscaleTextures } from '../utils/downscaleTextures';
 
 /**
  * Skylanders-inspired colorful Hub Town
@@ -100,9 +101,9 @@ export class HubWorld {
   public group: THREE.Group;
 
   // Interactive locations (for proximity checks)
-  public shopPosition = new THREE.Vector3(-12, 0, -5);
-  public pvpArenaPosition = new THREE.Vector3(15, 0, -8);
-  public cavePosition = new THREE.Vector3(0, 0, -25);
+  public shopPosition = new THREE.Vector3(-27, 0, -12);
+  public pvpArenaPosition = new THREE.Vector3(20, 0, -12);
+  public cavePosition = new THREE.Vector3(0, 0, -35);
   public npcPositions: { name: string; position: THREE.Vector3; dialog: string[] }[] = [];
 
   // Circle colliders for world objects (rocks, lanterns, pillars, NPCs)
@@ -120,7 +121,7 @@ export class HubWorld {
     this.buildPvPArena();
     this.buildCaveEntrance();
     this.buildNPCs();
-    this.buildSpawnAltar();
+    // this.buildSpawnAltar();
     this.buildDecorations();
 
     this.buildLighting();
@@ -181,11 +182,21 @@ export class HubWorld {
     };
 
     const paths = [
-      { from: [0, 0], to: [0, -30], width: 3 },    // North to portal
-
-      { from: [0, 0], to: [18, -8], width: 2.5 },   // East to PvP
-      { from: [0, 0], to: [0, 15], width: 2.5 },    // South spawn
+      { from: [0, 0], to: [0, -38], width: 3 },       // North to portal
+      { from: [0, 0], to: [0, 26], width: 2.5 },      // South spawn
     ];
+
+    // Curved paths — single continuous mesh per curve
+    const curvedPaths = [
+      // East to PvP
+      { waypoints: [[0, 0], [5, -1], [10, -3], [15, -6], [20, -9], [24, -12]], width: 2.5 },
+      // West to shop
+      { waypoints: [[0, 0], [-5, -1], [-10, -3], [-16, -6], [-22, -9], [-27, -12]], width: 2.5 },
+    ];
+
+    for (const cp of curvedPaths) {
+      this.buildCurvedPath(cp.waypoints, cp.width, hashStone, smoothstepJS);
+    }
 
     for (const p of paths) {
       const dx = p.to[0] - p.from[0];
@@ -277,131 +288,13 @@ export class HubWorld {
       }));
       pathMesh.rotation.x = -Math.PI / 2;
       pathMesh.position.set(
-        (p.from[0] + p.to[0]) / 2, 0.03,
+        (p.from[0] + p.to[0]) / 2, 0.28,
         (p.from[1] + p.to[1]) / 2,
       );
       pathMesh.rotation.z = -pathAngle;
       pathMesh.receiveShadow = true;
       pathMesh.castShadow = true;
       this.group.add(pathMesh);
-    }
-
-    // ── Curved cobblestone path to shop ──────────────────────────────────
-    {
-      const shopPathWidth = 2.5;
-      const shopCurve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(0, 0, 0),          // fountain center
-        new THREE.Vector3(-6, 0, -0.5),      // head west
-        new THREE.Vector3(-12, 0, -2),       // between the two lanterns
-        new THREE.Vector3(-12, 0, -5),       // arrive at shop heading south
-      ], false, 'catmullrom', 0.5);
-
-      const segsAlong = 50;
-      const segsAcross = Math.max(12, Math.floor(shopPathWidth * 8));
-      const totalLen = shopCurve.getLength();
-      const vtxCount = (segsAlong + 1) * (segsAcross + 1);
-      const posArr = new Float32Array(vtxCount * 3);
-      const colArr = new Float32Array(vtxCount * 3);
-
-      for (let j = 0; j <= segsAlong; j++) {
-        const t = j / segsAlong;
-        const center = shopCurve.getPoint(t);
-        const tangent = shopCurve.getTangent(t);
-        // Perpendicular direction in XZ plane
-        const perp = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-        const ly = (t - 0.5) * totalLen; // local along-path coordinate
-
-        for (let k = 0; k <= segsAcross; k++) {
-          const crossT = k / segsAcross - 0.5; // -0.5 to 0.5
-          const lx = crossT * shopPathWidth;
-          const idx = j * (segsAcross + 1) + k;
-
-          const wx = center.x + perp.x * lx;
-          const wz = center.z + perp.z * lx;
-
-          // ── Cobblestone grid (same logic as straight paths) ──
-          const stoneScale = 3.2;
-          const gx = lx * stoneScale;
-          const gy = ly * stoneScale;
-          const row = Math.floor(gy);
-          const adjX = gx + (row % 2) * 0.5;
-          const cellX = adjX - Math.floor(adjX) - 0.5;
-          const cellY = gy - Math.floor(gy) - 0.5;
-          const distToCenter = Math.sqrt(cellX * cellX + cellY * cellY);
-
-          const stoneShape = smoothstepJS(0.48, 0.32, distToCenter);
-          const h = stoneShape * 0.06;
-
-          const stoneID_x = Math.floor(adjX);
-          const stoneID_y = Math.floor(gy);
-          const stoneRand = hashStone(stoneID_x, stoneID_y);
-          const heightVariation = stoneRand * 0.025;
-
-          posArr[idx * 3]     = wx;
-          posArr[idx * 3 + 1] = 0.03 + h + heightVariation;
-          posArr[idx * 3 + 2] = wz;
-
-          // ── Color ──
-          const colorVar = hashStone(stoneID_x + 50, stoneID_y + 80);
-          const colorVar2 = hashStone(stoneID_x + 120, stoneID_y + 30);
-          let r = 0.40 + colorVar * 0.18;
-          let g2 = 0.33 + colorVar * 0.14;
-          let b = 0.22 + colorVar2 * 0.10;
-
-          const groutDarken = stoneShape * 0.4 + 0.6;
-          r *= groutDarken;
-          g2 *= groutDarken;
-          b *= groutDarken;
-
-          if (stoneShape < 0.3 && colorVar2 > 0.6) {
-            g2 += 0.06;
-            r -= 0.03;
-          }
-
-          // Edge fade
-          const edgeDist = Math.abs(lx) / (shopPathWidth / 2);
-          if (edgeDist > 0.75) {
-            const fade = (edgeDist - 0.75) / 0.25;
-            const f = fade * fade;
-            r = r * (1 - f) + 0.22 * f;
-            g2 = g2 * (1 - f) + 0.40 * f;
-            b = b * (1 - f) + 0.12 * f;
-            posArr[idx * 3 + 1] = 0.03 + (h + heightVariation) * (1 - f);
-          }
-
-          colArr[idx * 3]     = r;
-          colArr[idx * 3 + 1] = g2;
-          colArr[idx * 3 + 2] = b;
-        }
-      }
-
-      // Build index buffer
-      const idxArr: number[] = [];
-      for (let j = 0; j < segsAlong; j++) {
-        for (let k = 0; k < segsAcross; k++) {
-          const a = j * (segsAcross + 1) + k;
-          const bb = a + 1;
-          const c = (j + 1) * (segsAcross + 1) + k;
-          const d = c + 1;
-          idxArr.push(a, bb, c);
-          idxArr.push(bb, d, c);
-        }
-      }
-
-      const curveGeo = new THREE.BufferGeometry();
-      curveGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-      curveGeo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
-      curveGeo.setIndex(idxArr);
-      curveGeo.computeVertexNormals();
-
-      const curveMesh = new THREE.Mesh(curveGeo, new THREE.MeshStandardMaterial({
-        vertexColors: true,
-        roughness: 0.88,
-        metalness: 0.02,
-      }));
-      curveMesh.receiveShadow = true;
-      curveMesh.castShadow = true;
-      this.group.add(curveMesh);
     }
 
     // ── Central plaza — circular cobblestone surface ────────────────────
@@ -489,7 +382,7 @@ export class HubWorld {
       metalness: 0.02,
     }));
     plazaMesh.rotation.x = -Math.PI / 2;
-    plazaMesh.position.y = 0.035;
+    plazaMesh.position.y = 0.28;
     plazaMesh.receiveShadow = true;
     this.group.add(plazaMesh);
 
@@ -499,7 +392,7 @@ export class HubWorld {
       new THREE.MeshStandardMaterial({ color: 0x6a5a42, roughness: 0.85 }),
     );
     borderRing.rotation.x = -Math.PI / 2;
-    borderRing.position.y = 0.06;
+    borderRing.position.y = 0.30;
     this.group.add(borderRing);
 
     // Inner ring around the tree
@@ -508,7 +401,7 @@ export class HubWorld {
       new THREE.MeshStandardMaterial({ color: 0x7a6a52, roughness: 0.8 }),
     );
     innerRing.rotation.x = -Math.PI / 2;
-    innerRing.position.y = 0.07;
+    innerRing.position.y = 0.31;
     this.group.add(innerRing);
   }
 
@@ -516,600 +409,92 @@ export class HubWorld {
   public static readonly FOUNTAIN_RADIUS = 3.6;
 
   private buildFountainPlaza() {
-    const tree = new THREE.Group();
-    tree.name = 'tree-of-life';
+    // Load tree-house GLB as center tree
+    import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      const loader = new GLTFLoader();
+      loader.load('/models/center_tree.glb', (gltf) => {
+        const model = gltf.scene;
+        model.name = 'tree-of-life';
 
-    // --- Materials ---
-    const barkMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.95 });
-    const barkDark = new THREE.MeshStandardMaterial({ color: 0x2e1f14, roughness: 0.98 });
-    const mossMat = new THREE.MeshStandardMaterial({ color: 0x2a5a2a, roughness: 0.95 });
-    const leafMat = new THREE.MeshStandardMaterial({ color: 0x2d6b2d, roughness: 0.8, side: THREE.DoubleSide });
-    const leafLight = new THREE.MeshStandardMaterial({ color: 0x4a8a3a, roughness: 0.75, side: THREE.DoubleSide });
-    const leafGlow = new THREE.MeshStandardMaterial({
-      color: 0x3a7a3a, emissive: 0x115511, emissiveIntensity: 0.3,
-      roughness: 0.7, side: THREE.DoubleSide,
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        downscaleTextures(model);
+
+        // Scale to a large center tree (~20m)
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const scale = 20 / Math.max(size.y, 0.01);
+        model.scale.setScalar(scale);
+
+        // Ground the model and sink it so the round pedestal is hidden below ground
+        model.updateMatrixWorld(true);
+        const groundBox = new THREE.Box3().setFromObject(model);
+        const totalHeight = groundBox.max.y - groundBox.min.y;
+        model.position.y -= groundBox.min.y;
+        // Sink to bury the base pedestal flush with ground
+        model.position.y -= totalHeight * 0.10;
+
+        // Single tree glow light (merged two into one for perf)
+        const treeLight = new THREE.PointLight(0x66cc66, 2.5, 30);
+        treeLight.position.set(0, 12, 0);
+        model.add(treeLight);
+
+        this.group.add(model);
+        console.log(`[HubWorld] Center tree GLB loaded, scale: ${scale.toFixed(2)}, size:`, size.toArray().map(v => v.toFixed(1)));
+      }, undefined, (err) => {
+        console.error('[HubWorld] Failed to load center tree GLB:', err);
+      });
     });
-    const waterMat = new THREE.MeshStandardMaterial({
-      color: 0x22aacc, transparent: true, opacity: 0.55,
-      roughness: 0.05, metalness: 0.3,
-      emissive: 0x115566, emissiveIntensity: 0.3,
-    });
-    const runeMat = new THREE.MeshStandardMaterial({
-      color: 0x44ddaa, emissive: 0x22aa77, emissiveIntensity: 0.8,
-      roughness: 0.2,
-    });
-    const mushroomMat = new THREE.MeshStandardMaterial({
-      color: 0x88ddaa, emissive: 0x33aa66, emissiveIntensity: 0.5,
-      roughness: 0.6,
-    });
-
-    // ============================
-    // TRUNK - gnarled ancient tree
-    // ============================
-    const trunkGeo = new THREE.CylinderGeometry(0.7, 2.0, 9, 12, 20);
-    const tp = trunkGeo.attributes.position;
-    for (let i = 0; i < tp.count; i++) {
-      const x = tp.getX(i), y = tp.getY(i), z = tp.getZ(i);
-      const twist = Math.sin(y * 0.6) * 0.25;
-      const bulge = 1 + Math.sin(y * 2.5 + x * 3) * 0.12 + Math.sin(y * 4.1 + z * 2.7) * 0.08;
-      tp.setX(i, x * bulge + twist * z);
-      tp.setZ(i, z * bulge - twist * x);
-    }
-    tp.needsUpdate = true;
-    trunkGeo.computeVertexNormals();
-
-    const trunk = new THREE.Mesh(trunkGeo, barkMat);
-    trunk.position.y = 4.5;
-    trunk.castShadow = true;
-    trunk.receiveShadow = true;
-    tree.add(trunk);
-
-    // Trunk hollow - where water emerges
-    const hollow = new THREE.Mesh(
-      new THREE.SphereGeometry(0.45, 8, 6),
-      new THREE.MeshStandardMaterial({ color: 0x0a0805, roughness: 1.0 }),
-    );
-    hollow.position.set(0, 3.2, 1.4);
-    hollow.scale.set(1, 0.7, 0.5);
-    tree.add(hollow);
-
-    // ============================
-    // ROOTS - spreading across ground
-    // ============================
-    const rootData = [
-      { angle: 0.0, length: 4.5, thick: 0.28, yOff: 0.3 },
-      { angle: 0.8, length: 3.8, thick: 0.22, yOff: 0.2 },
-      { angle: 1.5, length: 5.0, thick: 0.32, yOff: 0.35 },
-      { angle: 2.2, length: 3.5, thick: 0.20, yOff: 0.25 },
-      { angle: 3.1, length: 4.8, thick: 0.30, yOff: 0.3 },
-      { angle: 3.9, length: 3.3, thick: 0.19, yOff: 0.2 },
-      { angle: 4.7, length: 4.2, thick: 0.26, yOff: 0.28 },
-      { angle: 5.5, length: 3.6, thick: 0.21, yOff: 0.22 },
-    ];
-
-    for (let i = 0; i < rootData.length; i++) {
-      const r = rootData[i];
-      const rootGeo = new THREE.CylinderGeometry(r.thick * 0.3, r.thick, r.length, 6, 4);
-      const rp = rootGeo.attributes.position;
-      for (let v = 0; v < rp.count; v++) {
-        const vx = rp.getX(v), vy = rp.getY(v), vz = rp.getZ(v);
-        rp.setX(v, vx * (1 + Math.sin(vy * 4) * 0.15));
-        rp.setZ(v, vz * (1 + Math.cos(vy * 3.5) * 0.12));
-      }
-      rp.needsUpdate = true;
-      rootGeo.computeVertexNormals();
-
-      const root = new THREE.Mesh(rootGeo, barkDark);
-      root.position.set(
-        Math.cos(r.angle) * (r.length * 0.4),
-        r.yOff,
-        Math.sin(r.angle) * (r.length * 0.4),
-      );
-      root.rotation.z = -Math.cos(r.angle) * 1.3;
-      root.rotation.x = Math.sin(r.angle) * 1.3;
-      root.castShadow = true;
-      tree.add(root);
-
-      // Glowing root tips (every other root)
-      if (i % 2 === 0) {
-        const tipGlow = new THREE.Mesh(
-          new THREE.SphereGeometry(0.1, 6, 6), runeMat.clone(),
-        );
-        const tipDist = r.length * 0.75;
-        tipGlow.position.set(
-          Math.cos(r.angle) * tipDist, 0.08, Math.sin(r.angle) * tipDist,
-        );
-        tipGlow.name = `tree-root-glow-${i}`;
-        tree.add(tipGlow);
-      }
-    }
-
-    // ============================
-    // BRANCHES - spreading from upper trunk
-    // ============================
-    const branchData = [
-      { angle: 0.3, tilt: 0.7, length: 4.0, thick: 0.3 },
-      { angle: 1.5, tilt: 0.6, length: 3.5, thick: 0.25 },
-      { angle: 2.8, tilt: 0.75, length: 4.5, thick: 0.35 },
-      { angle: 4.2, tilt: 0.55, length: 3.8, thick: 0.28 },
-      { angle: 5.5, tilt: 0.65, length: 3.2, thick: 0.22 },
-    ];
-
-    for (const b of branchData) {
-      const branchGeo = new THREE.CylinderGeometry(b.thick * 0.35, b.thick, b.length, 6, 4);
-      const bp = branchGeo.attributes.position;
-      for (let v = 0; v < bp.count; v++) {
-        const vx = bp.getX(v), vy = bp.getY(v);
-        bp.setX(v, vx * (1 + Math.sin(vy * 3) * 0.2));
-      }
-      bp.needsUpdate = true;
-      branchGeo.computeVertexNormals();
-
-      const branch = new THREE.Mesh(branchGeo, barkMat);
-      branch.position.set(Math.cos(b.angle) * 0.8, 7.0, Math.sin(b.angle) * 0.8);
-      branch.rotation.z = Math.cos(b.angle) * b.tilt;
-      branch.rotation.x = -Math.sin(b.angle) * b.tilt;
-      branch.castShadow = true;
-      tree.add(branch);
-    }
-
-    // ============================
-    // CANOPY - leaf clusters
-    // ============================
-    const leafPositions = [
-      { x: 0, y: 10.5, z: 0, size: 2.8 },
-      { x: 2.0, y: 10, z: 1.2, size: 2.2 },
-      { x: -2.2, y: 9.8, z: 0.8, size: 2.4 },
-      { x: 0.8, y: 9.5, z: -2.0, size: 2.0 },
-      { x: -1.2, y: 10.2, z: -1.2, size: 1.8 },
-      { x: 3.5, y: 8.8, z: 1.8, size: 1.8 },
-      { x: -3.0, y: 8.5, z: 2.2, size: 1.6 },
-      { x: 2.5, y: 8.6, z: -2.5, size: 1.7 },
-      { x: -3.2, y: 8.0, z: -1.5, size: 1.5 },
-      { x: 0, y: 11.0, z: 0.5, size: 1.8 },
-      { x: 3.0, y: 7.8, z: 0, size: 1.3 },
-      { x: -2.5, y: 7.5, z: -2.5, size: 1.4 },
-    ];
-    const leafMats = [leafMat, leafLight, leafGlow];
-    for (let i = 0; i < leafPositions.length; i++) {
-      const lp = leafPositions[i];
-      const leafCluster = new THREE.Mesh(
-        new THREE.SphereGeometry(lp.size, 8, 6), leafMats[i % 3],
-      );
-      leafCluster.position.set(lp.x, lp.y, lp.z);
-      leafCluster.scale.set(1, 0.55, 1);
-      leafCluster.name = `tree-leaf-${i}`;
-      leafCluster.castShadow = true;
-      tree.add(leafCluster);
-    }
-
-    // ============================
-    // WATER - magical flow from trunk hollow
-    // ============================
-    const streamGeo = new THREE.CylinderGeometry(0.06, 0.18, 2.8, 8);
-    const stream = new THREE.Mesh(streamGeo, waterMat);
-    stream.position.set(0, 1.8, 1.8);
-    stream.rotation.x = 0.25;
-    stream.name = 'tree-waterfall';
-    tree.add(stream);
-
-    // Smaller trickle streams from roots
-    for (let i = 0; i < 3; i++) {
-      const angle = (i / 3) * Math.PI * 2 + 0.5;
-      const miniStream = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.025, 0.06, 1.2, 6), waterMat,
-      );
-      miniStream.position.set(
-        Math.cos(angle) * 1.6, 0.6, Math.sin(angle) * 1.6,
-      );
-      miniStream.rotation.z = Math.cos(angle) * 0.5;
-      miniStream.rotation.x = -Math.sin(angle) * 0.5;
-      miniStream.name = `tree-stream-${i}`;
-      tree.add(miniStream);
-    }
-
-    // Water pool at base
-    const pool = new THREE.Mesh(
-      new THREE.CylinderGeometry(3.2, 3.5, 0.12, 32), waterMat,
-    );
-    pool.position.y = 0.18;
-    pool.name = 'tree-water-pool';
-    tree.add(pool);
-
-    // Pool stone edge
-    const poolEdge = new THREE.Mesh(
-      new THREE.TorusGeometry(3.35, 0.2, 8, 32),
-      new THREE.MeshStandardMaterial({ color: 0x6a6a6a, roughness: 0.85 }),
-    );
-    poolEdge.rotation.x = -Math.PI / 2;
-    poolEdge.position.y = 0.25;
-    tree.add(poolEdge);
-
-    // Splash ripples at waterfall landing
-    for (let i = 0; i < 3; i++) {
-      const ripple = new THREE.Mesh(
-        new THREE.RingGeometry(0.2, 0.35, 12),
-        new THREE.MeshBasicMaterial({
-          color: 0x44ccdd, transparent: true, opacity: 0.3, side: THREE.DoubleSide,
-        }),
-      );
-      ripple.rotation.x = -Math.PI / 2;
-      ripple.position.set(0, 0.2, 2.2);
-      ripple.name = `tree-ripple-${i}`;
-      tree.add(ripple);
-    }
-
-    // ============================
-    // RUNES - carved into bark
-    // ============================
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * Math.PI * 2;
-      const ry = 2.0 + i * 0.7;
-      const dist = 1.1 + Math.sin(ry * 0.5) * 0.2;
-      const rune = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, 0.25, 0.02), runeMat.clone(),
-      );
-      rune.position.set(Math.cos(angle) * dist, ry, Math.sin(angle) * dist);
-      rune.lookAt(new THREE.Vector3(Math.cos(angle) * 5, ry, Math.sin(angle) * 5));
-      rune.name = `tree-rune-${i}`;
-      tree.add(rune);
-    }
-
-    // ============================
-    // MOSS patches
-    // ============================
-    const mossPositions = [
-      { x: 1.0, y: 2.0, z: 0.6 }, { x: -1.1, y: 3.2, z: 0.4 },
-      { x: 0.4, y: 5.0, z: -1.0 }, { x: -0.6, y: 1.5, z: 1.1 },
-      { x: 0.8, y: 6.0, z: -0.5 }, { x: -0.9, y: 4.2, z: -0.7 },
-    ];
-    for (const mp of mossPositions) {
-      const moss = new THREE.Mesh(
-        new THREE.SphereGeometry(0.18 + Math.random() * 0.12, 5, 4), mossMat,
-      );
-      moss.position.set(mp.x, mp.y, mp.z);
-      moss.scale.y = 0.3;
-      tree.add(moss);
-    }
-
-    // ============================
-    // BIOLUMINESCENT MUSHROOMS
-    // ============================
-    const mushroomPos: number[][] = [
-      [2.2, 0.15, 1.8], [-1.8, 0.12, 2.5], [2.8, 0.1, -1.2],
-      [-2.3, 0.14, -2.0], [0.6, 0.18, 3.0], [-0.5, 2.0, 1.3],
-      [0.8, 3.5, -0.7],
-    ];
-    for (const [mx, my, mz] of mushroomPos) {
-      const cap = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12 + Math.random() * 0.08, 6, 4, 0, Math.PI * 2, 0, Math.PI * 0.55),
-        mushroomMat,
-      );
-      cap.position.set(mx, my + 0.18, mz);
-      tree.add(cap);
-      const stem = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.025, 0.04, 0.18, 4),
-        new THREE.MeshStandardMaterial({ color: 0xccccbb }),
-      );
-      stem.position.set(mx, my + 0.09, mz);
-      tree.add(stem);
-    }
-
-    // ============================
-    // FIREFLIES - floating magical particles
-    // ============================
-    const fireflyBaseMat = new THREE.MeshBasicMaterial({
-      color: 0xaaffaa, transparent: true, opacity: 0.7,
-    });
-    for (let i = 0; i < 20; i++) {
-      const firefly = new THREE.Mesh(
-        new THREE.SphereGeometry(0.04, 4, 4), fireflyBaseMat.clone(),
-      );
-      const bx = (Math.random() - 0.5) * 10;
-      const by = 1.5 + Math.random() * 9;
-      const bz = (Math.random() - 0.5) * 10;
-      firefly.position.set(bx, by, bz);
-      firefly.userData.baseX = bx;
-      firefly.userData.baseY = by;
-      firefly.userData.baseZ = bz;
-      firefly.name = `tree-firefly-${i}`;
-      tree.add(firefly);
-    }
-
-    // ============================
-    // LIGHTING
-    // ============================
-    const canopyLight = new THREE.PointLight(0x44cc88, 2.0, 20);
-    canopyLight.position.set(0, 10, 0);
-    tree.add(canopyLight);
-
-    const waterLight = new THREE.PointLight(0x22aacc, 1.5, 10);
-    waterLight.position.set(0, 0.5, 0.5);
-    tree.add(waterLight);
-
-    const runeLight = new THREE.PointLight(0x44ddaa, 1.0, 8);
-    runeLight.position.set(0, 3.5, 0);
-    tree.add(runeLight);
-
-    const upLight = new THREE.PointLight(0x88cc44, 0.6, 12);
-    upLight.position.set(0, 6, 0);
-    tree.add(upLight);
-
-    this.group.add(tree);
   }
 
   private buildShop() {
     const pos = this.shopPosition;
-    const stall = new THREE.Group();
-    stall.name = 'shop-stall';
 
-    // --- Materials ---
-    const darkWood = new THREE.MeshStandardMaterial({ color: 0x3e2410, roughness: 0.92, metalness: 0 });
-    const plank = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.9, metalness: 0 });
-    const plankLight = new THREE.MeshStandardMaterial({ color: 0x8b6842, roughness: 0.88, metalness: 0 });
-    const canvasMat = new THREE.MeshStandardMaterial({ color: 0xc2a672, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
-    const canvasStripe = new THREE.MeshStandardMaterial({ color: 0x8b3a3a, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
-    const metalMat = new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.6, roughness: 0.4 });
-    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x5a5550, roughness: 0.92, metalness: 0.05 });
+    import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      const loader = new GLTFLoader();
+      loader.load('/models/shop.glb', (gltf) => {
+        const model = gltf.scene;
+        model.name = 'shop-stall';
 
-    const W = 5, D = 2.5;
-    const counterH = 1.05;
-    const postH = 2.8;
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        downscaleTextures(model);
 
-    // ============================
-    // STONE BASE — cobblestone pad
-    // ============================
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(3.2, 3.4, 0.12, 8), stoneMat,
-    );
-    base.position.set(0, 0.06, 0);
-    base.receiveShadow = true;
-    stall.add(base);
+        // Scale to fit: target ~6m wide footprint
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const targetWidth = 6;
+        const scale = targetWidth / Math.max(size.x, size.z, 0.01);
+        model.scale.setScalar(scale);
 
-    // ============================
-    // COUNTER — wooden table
-    // ============================
-    const top = new THREE.Mesh(
-      new THREE.BoxGeometry(W, 0.1, D), plankLight,
-    );
-    top.position.set(0, counterH, 0);
-    top.castShadow = true;
-    top.receiveShadow = true;
-    stall.add(top);
+        // Rotate so the front faces towards the tree/fountain (towards +X)
+        model.rotation.y = Math.PI / 2;
 
-    // Front board
-    const frontBoard = new THREE.Mesh(
-      new THREE.BoxGeometry(W, counterH * 0.6, 0.07), plank,
-    );
-    frontBoard.position.set(0, counterH * 0.45, D / 2 - 0.02);
-    frontBoard.castShadow = true;
-    stall.add(frontBoard);
+        // Ground the model
+        model.updateMatrixWorld(true);
+        const groundBox = new THREE.Box3().setFromObject(model);
+        model.position.copy(pos);
+        model.position.y -= groundBox.min.y;
 
-    // Side boards
-    for (const side of [-1, 1]) {
-      const sideBoard = new THREE.Mesh(
-        new THREE.BoxGeometry(0.07, counterH * 0.6, D - 0.1), plank,
-      );
-      sideBoard.position.set(side * (W / 2 - 0.02), counterH * 0.45, 0);
-      sideBoard.castShadow = true;
-      stall.add(sideBoard);
-    }
+        // Warm interior light
+        const shopLight = new THREE.PointLight(0xffaa44, 1, 8);
+        shopLight.position.set(pos.x, 2.2, pos.z);
+        this.group.add(shopLight);
 
-    // Four corner legs
-    for (const lx of [-W / 2 + 0.1, W / 2 - 0.1]) {
-      for (const lz of [-D / 2 + 0.1, D / 2 - 0.1]) {
-        const leg = new THREE.Mesh(
-          new THREE.BoxGeometry(0.12, counterH, 0.12), darkWood,
-        );
-        leg.position.set(lx, counterH / 2, lz);
-        leg.castShadow = true;
-        stall.add(leg);
-      }
-    }
-
-    // ============================
-    // CANOPY — canvas awning on 4 posts
-    // ============================
-    for (const px of [-W / 2 + 0.1, W / 2 - 0.1]) {
-      for (const pz of [-D / 2 + 0.1, D / 2 - 0.1]) {
-        const post = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.06, 0.07, postH, 6), darkWood,
-        );
-        post.position.set(px, postH / 2, pz);
-        post.castShadow = true;
-        stall.add(post);
-      }
-    }
-
-    // Cross beams at top
-    for (const px of [-W / 2 + 0.1, W / 2 - 0.1]) {
-      const beam = new THREE.Mesh(
-        new THREE.BoxGeometry(0.08, 0.08, D + 0.4), darkWood,
-      );
-      beam.position.set(px, postH - 0.04, 0);
-      beam.castShadow = true;
-      stall.add(beam);
-    }
-    for (const pz of [-D / 2 + 0.1, D / 2 + 0.1]) {
-      const beam = new THREE.Mesh(
-        new THREE.BoxGeometry(W + 0.4, 0.08, 0.08), darkWood,
-      );
-      beam.position.set(0, postH - 0.04, pz);
-      beam.castShadow = true;
-      stall.add(beam);
-    }
-
-    // Canvas sheet with slight sag
-    const canopyY = postH + 0.02;
-    const canopyOverhang = 0.5;
-    const canopyGeo = new THREE.PlaneGeometry(W + canopyOverhang * 2, D + canopyOverhang * 2, 4, 4);
-    const posAttr = canopyGeo.attributes.position;
-    for (let i = 0; i < posAttr.count; i++) {
-      const x = posAttr.getX(i);
-      const y = posAttr.getY(i);
-      const dist = Math.sqrt(x * x + y * y);
-      posAttr.setZ(i, -dist * 0.04);
-    }
-    canopyGeo.computeVertexNormals();
-    const canopyMesh = new THREE.Mesh(canopyGeo, canvasMat);
-    canopyMesh.rotation.x = -Math.PI / 2;
-    canopyMesh.position.set(0, canopyY, 0);
-    canopyMesh.castShadow = true;
-    canopyMesh.receiveShadow = true;
-    stall.add(canopyMesh);
-
-    // Decorative stripes on canvas
-    for (const sz of [-0.7, 0.7]) {
-      const stripe = new THREE.Mesh(
-        new THREE.PlaneGeometry(W + canopyOverhang * 2, 0.5), canvasStripe,
-      );
-      stripe.rotation.x = -Math.PI / 2;
-      stripe.position.set(0, canopyY + 0.01, sz);
-      stall.add(stripe);
-    }
-
-    // Front valance (hanging trim)
-    const valance = new THREE.Mesh(
-      new THREE.PlaneGeometry(W + canopyOverhang * 2, 0.3), canvasStripe,
-    );
-    valance.position.set(0, canopyY - 0.15, D / 2 + canopyOverhang);
-    stall.add(valance);
-
-    // Scalloped trim pieces
-    for (let i = 0; i < 8; i++) {
-      const tri = new THREE.Mesh(
-        new THREE.ConeGeometry(0.12, 0.2, 3), canvasMat,
-      );
-      tri.rotation.z = Math.PI;
-      tri.position.set(-W / 2 - canopyOverhang + 0.45 + i * 0.8, canopyY - 0.4, D / 2 + canopyOverhang);
-      stall.add(tri);
-    }
-
-    // ============================
-    // MERCHANDISE on counter
-    // ============================
-    const potionColors = [0xff3333, 0x3366ff, 0x33dd33];
-    for (let i = 0; i < 3; i++) {
-      const bottle = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.05, 0.07, 0.2, 8),
-        new THREE.MeshPhysicalMaterial({
-          color: potionColors[i], transmission: 0.6, roughness: 0.05,
-          thickness: 0.5, transparent: true, opacity: 0.75,
-        }),
-      );
-      bottle.position.set(-1.5 + i * 0.5, counterH + 0.15, -0.4);
-      stall.add(bottle);
-
-      const cork = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.02, 0.03, 0.04, 4),
-        new THREE.MeshStandardMaterial({ color: 0xaa8855, roughness: 0.85 }),
-      );
-      cork.position.set(-1.5 + i * 0.5, counterH + 0.28, -0.4);
-      stall.add(cork);
-    }
-
-    // Sword display (leaning)
-    const swordBlade = new THREE.Mesh(
-      new THREE.BoxGeometry(0.06, 0.9, 0.02),
-      new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8, roughness: 0.2 }),
-    );
-    swordBlade.position.set(1.5, counterH + 0.5, 0);
-    swordBlade.rotation.z = 0.15;
-    stall.add(swordBlade);
-
-    const swordHilt = new THREE.Mesh(
-      new THREE.BoxGeometry(0.2, 0.04, 0.06),
-      new THREE.MeshStandardMaterial({ color: 0x4a3520, roughness: 0.8 }),
-    );
-    swordHilt.position.set(1.45, counterH + 0.08, 0);
-    stall.add(swordHilt);
-
-    // Leather armor on display
-    const armorDummy = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.2, 0.25, 0.5, 8),
-      new THREE.MeshStandardMaterial({ color: 0x7a5530, roughness: 0.9 }),
-    );
-    armorDummy.position.set(0.3, counterH + 0.3, 0.2);
-    stall.add(armorDummy);
-
-    // Small crate on counter
-    const smallCrate = new THREE.Mesh(
-      new THREE.BoxGeometry(0.4, 0.3, 0.35), plank,
-    );
-    smallCrate.position.set(-0.7, counterH + 0.2, 0.3);
-    smallCrate.rotation.y = 0.2;
-    stall.add(smallCrate);
-
-    // ============================
-    // BARRELS beside stall
-    // ============================
-    for (const [bx, bz] of [[-2.8, 0.3], [2.8, -0.2]] as number[][]) {
-      const barrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.4, 0.36, 0.85, 10), plank,
-      );
-      barrel.position.set(bx, 0.42, bz);
-      barrel.castShadow = true;
-      stall.add(barrel);
-
-      for (const ry of [0.12, 0.42, 0.72]) {
-        const hoop = new THREE.Mesh(
-          new THREE.TorusGeometry(0.39, 0.012, 6, 12), metalMat,
-        );
-        hoop.position.set(bx, ry, bz);
-        hoop.rotation.x = Math.PI / 2;
-        stall.add(hoop);
-      }
-    }
-
-    // ============================
-    // HANGING SIGN — "TOIVO'S FORGE"
-    // ============================
-    const signArm = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.02, 0.02, 1.2, 5), metalMat,
-    );
-    signArm.rotation.z = Math.PI / 2;
-    signArm.position.set(0.6, postH - 0.5, D / 2 + canopyOverhang + 0.1);
-    stall.add(signArm);
-
-    const signBoard = new THREE.Mesh(
-      new THREE.BoxGeometry(1.6, 0.55, 0.05), plank,
-    );
-    signBoard.position.set(0.6, postH - 0.95, D / 2 + canopyOverhang + 0.1);
-    stall.add(signBoard);
-
-    const signText = this.createTextSign("TOIVO'S FORGE", 0xFFD700);
-    signText.position.set(0.6, postH - 0.95, D / 2 + canopyOverhang + 0.16);
-    stall.add(signText);
-
-    for (const sx of [-0.3, 0.3]) {
-      const chain = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.006, 0.006, 0.32, 4), metalMat,
-      );
-      chain.position.set(0.6 + sx, postH - 0.68, D / 2 + canopyOverhang + 0.1);
-      stall.add(chain);
-    }
-
-    // ============================
-    // LANTERN hanging from canopy
-    // ============================
-    const lanternHook = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.008, 0.008, 0.4, 4), metalMat,
-    );
-    lanternHook.position.set(0, canopyY - 0.2, 0);
-    stall.add(lanternHook);
-
-    const lanternFrame = new THREE.Mesh(
-      new THREE.BoxGeometry(0.2, 0.25, 0.2), metalMat,
-    );
-    lanternFrame.position.set(0, canopyY - 0.5, 0);
-    stall.add(lanternFrame);
-
-    const lanternLight = new THREE.PointLight(0xffaa44, 0.8, 7);
-    lanternLight.position.set(0, canopyY - 0.5, 0);
-    stall.add(lanternLight);
-
-    stall.position.copy(pos);
-    this.group.add(stall);
+        this.group.add(model);
+        console.log(`[HubWorld] Shop GLB loaded, scale: ${scale.toFixed(2)}, size:`, size.toArray().map(v => v.toFixed(1)));
+      }, undefined, (err) => {
+        console.error('[HubWorld] Failed to load shop GLB:', err);
+      });
+    });
   }
 
   private buildPvPArena() {
@@ -1172,787 +557,82 @@ export class HubWorld {
   private buildCaveEntrance() {
     const cp = this.cavePosition.clone();
 
-    // ── a) Dragon skull — resting ON the ground, open mouth = portal ───
-    // Skull is lying flat: lower jaw at y≈0, cranium rises to y≈3-4
-    // Mouth faces +Z (toward player), player walks INTO the open mouth
-
-    const boneMat = new THREE.MeshStandardMaterial({
-      color: 0xd4c9a8,
-      roughness: 0.85,
-      metalness: 0.05,
+    // ── Load dragon skull GLB model ───────────────────────────────────
+    import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      const loader = new GLTFLoader();
+      loader.load('/models/dragon_skull.glb', (gltf) => {
+        const model = gltf.scene;
+        model.position.copy(cp);
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        downscaleTextures(model);
+        // Auto-scale: measure and fit to roughly same footprint as old skeleton
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const targetHeight = 12; // ~12m tall skull entrance
+        const scale = targetHeight / Math.max(size.y, 0.01);
+        model.scale.setScalar(scale);
+        // Face the mouth toward -Z (toward players approaching from spawn)
+        model.rotation.y = 0;
+        // Ground the model
+        model.updateMatrixWorld(true);
+        const groundBox = new THREE.Box3().setFromObject(model);
+        model.position.y -= groundBox.min.y;
+        this.group.add(model);
+        console.log(`[HubWorld] Dragon skull loaded, scale: ${scale.toFixed(2)}, size:`, size.toArray().map(v => v.toFixed(1)));
+      }, undefined, (err) => {
+        console.error('[HubWorld] Failed to load dragon skull GLB:', err);
+      });
     });
 
-    const recessMat = new THREE.MeshStandardMaterial({
-      color: 0x1a1210,
-      roughness: 0.95,
-      metalness: 0,
-    });
+    // ── Atmosphere effects (kept from original) ───────────────────────
 
-    // Cranium — large angular skull, lifted higher for gaping mouth underneath
-    const craniGeo = new THREE.BoxGeometry(6.0, 3.5, 8.0, 8, 6, 8);
-    const craniPos = craniGeo.attributes.position;
-    for (let i = 0; i < craniPos.count; i++) {
-      let x = craniPos.getX(i), y = craniPos.getY(i), z = craniPos.getZ(i);
-      // V-shaped snout taper toward front (+Z)
-      if (z > 0) {
-        const taper = 1 - (z / 4.0) * 0.45;
-        x *= taper;
-        y *= (taper * 0.8 + 0.2);
-      }
-      // Angular brow ridge — more pronounced
-      if (y > 0.3 && z > -1) y += 0.7 * Math.max(0, 1 - Math.abs(x) / 2.8);
-      // Occipital bulge at back
-      if (z < -2) y += Math.max(0, (-z - 2) / 1.5) * 0.4;
-      // Flatten bottom — this is the roof of the mouth
-      if (y < -0.8) y = -0.8;
-      // Cheek flare
-      if (y < 0 && Math.abs(x) > 1.5) x *= 1.2;
-      craniPos.setX(i, x);
-      craniPos.setY(i, y);
-    }
-    craniPos.needsUpdate = true;
-    craniGeo.computeVertexNormals();
-    displaceBone(craniGeo, 0.06, 101);
-    applyBoneWeathering(craniGeo, { seed: 101, mossAmount: 0.15, crackDarkness: 0.22 });
-    const cranium = new THREE.Mesh(craniGeo, boneMat);
-    cranium.position.set(cp.x, 3.5, cp.z);
-    cranium.castShadow = true;
-    this.group.add(cranium);
-
-    // Sagittal crest — sharp ridge along skull top
-    const crestGeo = new THREE.BoxGeometry(0.3, 1.0, 6.0, 3, 3, 8);
-    const crestP = crestGeo.attributes.position;
-    for (let v = 0; v < crestP.count; v++) {
-      const y = crestP.getY(v), z = crestP.getZ(v);
-      if (z > 0) crestP.setY(v, y * (1 - z / 6.0 * 0.5));
-    }
-    crestP.needsUpdate = true;
-    crestGeo.computeVertexNormals();
-    displaceBone(crestGeo, 0.06, 102);
-    applyBoneWeathering(crestGeo, { seed: 102, bleachAmount: 0.14 });
-    const crest = new THREE.Mesh(crestGeo, boneMat);
-    crest.position.set(cp.x, 5.5, cp.z - 1.0);
-    crest.castShadow = true;
-    this.group.add(crest);
-
-    // Skull spikes — horn-like protrusions along skull edges
-    for (let i = 0; i < 4; i++) {
-      for (const side of [-1, 1]) {
-        const spkH = 0.6 - i * 0.08;
-        const spkGeo = new THREE.ConeGeometry(0.1, spkH, 4);
-        displaceBone(spkGeo, 0.015, 180 + i * 2 + (side > 0 ? 1 : 0));
-        applyBoneWeathering(spkGeo, { seed: 180 + i * 2 + (side > 0 ? 1 : 0) });
-        const spk = new THREE.Mesh(spkGeo, boneMat);
-        spk.position.set(
-          cp.x + side * (2.5 - i * 0.15),
-          4.8 - i * 0.2,
-          cp.z + 1.0 - i * 1.2,
-        );
-        spk.rotation.z = side * 0.5;
-        spk.rotation.x = -0.15;
-        spk.castShadow = true;
-        this.group.add(spk);
-      }
-    }
-
-    // Upper jaw — forms roof of the open mouth portal (wide gaping opening)
-    const jawUpperGeo = new THREE.BoxGeometry(5.5, 1.0, 6.0, 7, 3, 7);
-    const jawUPos = jawUpperGeo.attributes.position;
-    for (let i = 0; i < jawUPos.count; i++) {
-      const z = jawUPos.getZ(i);
-      if (z > 0) jawUPos.setX(i, jawUPos.getX(i) * (1 - (z / 3.0) * 0.45));
-    }
-    jawUPos.needsUpdate = true;
-    jawUpperGeo.computeVertexNormals();
-    displaceBone(jawUpperGeo, 0.04, 103);
-    applyBoneWeathering(jawUpperGeo, { seed: 103, crackDarkness: 0.18 });
-    const jawUpper = new THREE.Mesh(jawUpperGeo, boneMat);
-    jawUpper.position.set(cp.x, 2.8, cp.z + 2.5);
-    jawUpper.castShadow = true;
-    this.group.add(jawUpper);
-
-    // Lower jaw — two massive mandible halves flat on ground, spread wide open
+    // Dragon eyeball GLB models in skull eye sockets
     for (const side of [-1, 1]) {
-      const mandGeo = new THREE.BoxGeometry(2.5, 0.5, 6.0, 5, 2, 6);
-      const mandPos = mandGeo.attributes.position;
-      for (let i = 0; i < mandPos.count; i++) {
-        const z = mandPos.getZ(i);
-        if (z > 0) mandPos.setX(i, mandPos.getX(i) * (1 - (z / 3.0) * 0.45));
-      }
-      mandPos.needsUpdate = true;
-      mandGeo.computeVertexNormals();
-      displaceBone(mandGeo, 0.03, 104 + side);
-      applyBoneWeathering(mandGeo, { seed: 104 + side, crackDarkness: 0.22 });
-      const mandible = new THREE.Mesh(mandGeo, boneMat);
-      mandible.position.set(cp.x + side * 1.6, 0.2, cp.z + 2.5);
-      mandible.rotation.z = side * 0.08;
-      mandible.rotation.y = side * 0.12;
-      mandible.castShadow = true;
-      this.group.add(mandible);
-    }
+      const eyeX = cp.x + side * 1.3;
+      const eyeY = 4.5;
+      const eyeZ = cp.z + 1.2;
 
-    // Nasal openings — dark cavities on top of snout
-    for (const side of [-1, 1]) {
-      const nasalShape = new THREE.Shape();
-      nasalShape.moveTo(0, 0);
-      nasalShape.bezierCurveTo(0.3, 0.4 * side, 0.6, 0.35, 0.5, 0);
-      nasalShape.bezierCurveTo(0.4, -0.25, 0.1, -0.25, 0, 0);
-      const nasalGeo = new THREE.ShapeGeometry(nasalShape);
-      const nasal = new THREE.Mesh(nasalGeo, recessMat);
-      nasal.position.set(cp.x + side * 0.5, 4.2, cp.z + 4.0);
-      nasal.scale.set(0.8, 0.7, 1);
-      this.group.add(nasal);
-    }
-
-    // Orbital ridges — brow bones above eye sockets
-    for (const side of [-1, 1]) {
-      const browCurve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(side * 0.5, 0, 0),
-        new THREE.Vector3(side * 1.0, 0.3, 0.2),
-        new THREE.Vector3(side * 1.5, 0.15, 0),
-        new THREE.Vector3(side * 1.8, -0.1, -0.2),
-      ]);
-      const browGeo = new THREE.TubeGeometry(browCurve, 8, 0.2, 6, false);
-      displaceBone(browGeo, 0.03, 110 + side);
-      applyBoneWeathering(browGeo, { seed: 110 + side, bleachAmount: 0.1 });
-      const browBone = new THREE.Mesh(browGeo, boneMat);
-      browBone.position.set(cp.x, 4.5, cp.z + 1.5);
-      browBone.castShadow = true;
-      this.group.add(browBone);
-    }
-
-    // Cheekbones — zygomatic arches
-    for (const side of [-1, 1]) {
-      const zygCurve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(side * 0.8, -0.3, 0.5),
-        new THREE.Vector3(side * 1.2, -0.8, 0.3),
-      ]);
-      const zygGeo = new THREE.TubeGeometry(zygCurve, 6, 0.14, 5, false);
-      displaceBone(zygGeo, 0.025, 115 + side);
-      applyBoneWeathering(zygGeo, { seed: 115 + side });
-      const zygomatic = new THREE.Mesh(zygGeo, boneMat);
-      zygomatic.position.set(cp.x + side * 0.8, 3.6, cp.z + 1.0);
-      zygomatic.castShadow = true;
-      this.group.add(zygomatic);
-    }
-
-    // Teeth — upper jaw: 20 teeth hanging DOWN from raised jaw, big fangs at front
-    for (let i = 0; i < 20; i++) {
-      const side = (i % 2 === 0) ? -1 : 1;
-      const idx = Math.floor(i / 2);
-      const isFang = idx < 3;
-      const isBroken = idx === 5 || idx === 8;
-      const baseH = isFang ? (1.5 - idx * 0.15) : (0.5 + Math.sin(i * 2.3) * 0.15);
-      const h = isBroken ? baseH * 0.4 : baseH;
-      const r = isFang ? 0.14 : Math.max(0.04, 0.09 - idx * 0.005);
-      const toothGeo = new THREE.ConeGeometry(r, h, 5);
-      const tPos = toothGeo.attributes.position;
-      for (let v = 0; v < tPos.count; v++) {
-        const y = tPos.getY(v);
-        // Slight backward curve to teeth
-        if (y < 0) tPos.setZ(v, tPos.getZ(v) + y * 0.15);
-      }
-      tPos.needsUpdate = true;
-      toothGeo.computeVertexNormals();
-      displaceBone(toothGeo, 0.012, 120 + i);
-      applyBoneWeathering(toothGeo, { seed: 120 + i, baseColor: [0.88, 0.84, 0.68] });
-      const tooth = new THREE.Mesh(toothGeo, boneMat);
-      // Teeth hang from upper jaw (y≈2.3) along the jaw edge, wider spread
-      tooth.position.set(
-        cp.x + side * (1.8 + idx * 0.2),
-        2.3 - h / 2 + idx * 0.02,
-        cp.z + 4.0 - idx * 0.45,
-      );
-      tooth.rotation.z = Math.PI; // Point downward
-      tooth.rotation.x = Math.sin(i * 3.7) * 0.12;
-      tooth.rotation.y = Math.sin(i * 2.1) * 0.1;
-      tooth.castShadow = true;
-      this.group.add(tooth);
-    }
-
-    // Teeth — lower jaw: 14 teeth poking UP from mandibles on ground
-    for (let i = 0; i < 14; i++) {
-      const side = (i % 2 === 0) ? -1 : 1;
-      const idx = Math.floor(i / 2);
-      const isFang = idx < 2;
-      const isBroken = idx === 3;
-      const baseH = isFang ? (1.2 - idx * 0.2) : (0.4 + Math.sin(i * 1.8) * 0.12);
-      const h = isBroken ? baseH * 0.35 : baseH;
-      const r = isFang ? 0.11 : Math.max(0.04, 0.07 - idx * 0.004);
-      const toothGeo = new THREE.ConeGeometry(r, h, 5);
-      const tPos = toothGeo.attributes.position;
-      for (let v = 0; v < tPos.count; v++) {
-        const y = tPos.getY(v);
-        if (y > 0) tPos.setZ(v, tPos.getZ(v) - y * 0.1);
-      }
-      tPos.needsUpdate = true;
-      toothGeo.computeVertexNormals();
-      displaceBone(toothGeo, 0.01, 140 + i);
-      applyBoneWeathering(toothGeo, { seed: 140 + i, baseColor: [0.85, 0.80, 0.62] });
-      const tooth = new THREE.Mesh(toothGeo, boneMat);
-      // Teeth point UP from lower jaw, wider spread matching mandibles
-      tooth.position.set(
-        cp.x + side * (1.4 + idx * 0.22),
-        0.4 + h / 2,
-        cp.z + 4.0 - idx * 0.5,
-      );
-      tooth.rotation.x = Math.sin(i * 2.5) * 0.08;
-      tooth.rotation.y = side * Math.sin(i * 1.7) * 0.06;
-      tooth.castShadow = true;
-      this.group.add(tooth);
-    }
-
-    // Eye sockets + glow (naming preserved for animations)
-    for (const side of [-1, 1]) {
-      const socketGeo = new THREE.SphereGeometry(0.55, 10, 10);
-      displaceBone(socketGeo, 0.03, 150 + side);
-      const socket = new THREE.Mesh(socketGeo, recessMat);
-      socket.position.set(cp.x + side * 1.5, 4.0, cp.z + 1.6);
-      socket.scale.set(1.2, 0.9, 0.7);
-      this.group.add(socket);
-
-      const eyeGlow = new THREE.PointLight(0x22ff44, 1.5, 6);
-      eyeGlow.position.set(cp.x + side * 1.5, 4.0, cp.z + 1.8);
+      // Point light for glow
+      const eyeGlow = new THREE.PointLight(0xff2200, 3.0, 10);
+      eyeGlow.position.set(eyeX, eyeY, eyeZ);
       eyeGlow.name = `dragon-eye-${side === -1 ? 'L' : 'R'}`;
       this.group.add(eyeGlow);
 
-      const eyeOrb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.2, 6, 6),
-        new THREE.MeshBasicMaterial({ color: 0x22ff44, transparent: true, opacity: 0.7 }),
-      );
-      eyeOrb.position.set(cp.x + side * 1.5, 4.0, cp.z + 1.65);
-      eyeOrb.name = `dragon-eye-orb-${side === -1 ? 'L' : 'R'}`;
-      this.group.add(eyeOrb);
-    }
+      // Load eyeball GLB
+      import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+        const loader = new GLTFLoader();
+        loader.load('/models/dragon_eye.glb', (gltf) => {
+          const eye = gltf.scene;
+          downscaleTextures(eye);
+          eye.position.set(eyeX, eyeY, eyeZ);
 
-    // Horns — sweep backward from skull, close to ground
-    for (const side of [-1, 1]) {
-      const hornCurve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(cp.x + side * 2.2, 4.5, cp.z + 0.5),
-        new THREE.Vector3(cp.x + side * 3.2, 5.2, cp.z - 0.5),
-        new THREE.Vector3(cp.x + side * 4.0, 4.8, cp.z - 2.0),
-        new THREE.Vector3(cp.x + side * 4.2, 3.5, cp.z - 3.5),
-      ]);
-      const hornGeo = new THREE.TubeGeometry(hornCurve, 12, 0.22, 7, false);
-      const hPos = hornGeo.attributes.position;
-      for (let v = 0; v < hPos.count; v++) {
-        const p = new THREE.Vector3(hPos.getX(v), hPos.getY(v), hPos.getZ(v));
-        const startD = p.distanceTo(hornCurve.getPoint(0));
-        const endD = p.distanceTo(hornCurve.getPoint(1));
-        const t = startD / (startD + endD + 0.001);
-        const taper = 1 - t * 0.7;
-        const center = hornCurve.getPoint(t);
-        hPos.setX(v, center.x + (hPos.getX(v) - center.x) * taper);
-        hPos.setY(v, center.y + (hPos.getY(v) - center.y) * taper);
-        hPos.setZ(v, center.z + (hPos.getZ(v) - center.z) * taper);
-      }
-      hPos.needsUpdate = true;
-      hornGeo.computeVertexNormals();
-      displaceBone(hornGeo, 0.04, 160 + side);
-      applyBoneWeathering(hornGeo, { seed: 160 + side, baseColor: [0.75, 0.70, 0.55] });
-      const horn = new THREE.Mesh(hornGeo, boneMat);
-      horn.castShadow = true;
-      this.group.add(horn);
-    }
+          // Auto-scale to fit eye socket (~0.9m diameter)
+          const box = new THREE.Box3().setFromObject(eye);
+          const size = box.getSize(new THREE.Vector3());
+          const scale = 0.9 / Math.max(size.x, size.y, size.z);
+          eye.scale.setScalar(scale);
 
-    // Dark interior (the maw) — large dark void visible through the gaping open mouth
-    // This is the portal the player walks into
-    const interiorGeo = new THREE.PlaneGeometry(5.0, 3.5);
-    const interior = new THREE.Mesh(interiorGeo, new THREE.MeshBasicMaterial({
-      color: 0x010203, side: THREE.DoubleSide,
-    }));
-    interior.position.set(cp.x, 1.5, cp.z - 0.5);
-    this.group.add(interior);
+          // Face forward (+Z toward players)
+          eye.rotation.y = Math.PI;
 
-    // Additional dark planes for depth/tunnel effect inside mouth
-    const innerMawGeo = new THREE.PlaneGeometry(4.5, 3.2);
-    const innerMaw = new THREE.Mesh(innerMawGeo, new THREE.MeshBasicMaterial({
-      color: 0x010102, side: THREE.DoubleSide,
-    }));
-    innerMaw.position.set(cp.x, 1.4, cp.z - 2.5);
-    this.group.add(innerMaw);
-
-    // Side walls of the maw — dark planes to create enclosed tunnel feel
-    for (const side of [-1, 1]) {
-      const wallGeo = new THREE.PlaneGeometry(3.0, 3.5);
-      const wall = new THREE.Mesh(wallGeo, new THREE.MeshBasicMaterial({
-        color: 0x020203, side: THREE.DoubleSide,
-      }));
-      wall.position.set(cp.x + side * 2.2, 1.5, cp.z + 0.5);
-      wall.rotation.y = side * Math.PI / 2;
-      this.group.add(wall);
-    }
-
-    // Ceiling of the maw
-    const ceilGeo = new THREE.PlaneGeometry(4.5, 4.0);
-    const ceil = new THREE.Mesh(ceilGeo, new THREE.MeshBasicMaterial({
-      color: 0x010102, side: THREE.DoubleSide,
-    }));
-    ceil.rotation.x = Math.PI / 2;
-    ceil.position.set(cp.x, 2.8, cp.z + 0.5);
-    this.group.add(ceil);
-
-    // ── b) Spine — ground-level vertebrae from skull base toward tail ───
-    // Spine runs close to ground: y≈1.5 near skull, tapering to y≈0.5 at end
-    const spineCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(cp.x, 1.5, cp.z - 3),
-      new THREE.Vector3(cp.x + 0.15, 1.4, cp.z - 7),
-      new THREE.Vector3(cp.x - 0.1, 1.2, cp.z - 11),
-      new THREE.Vector3(cp.x + 0.2, 0.9, cp.z - 15),
-      new THREE.Vector3(cp.x, 0.6, cp.z - 19),
-    ]);
-    const spineCount = 14;
-    for (let i = 0; i < spineCount; i++) {
-      const t = i / (spineCount - 1);
-      const vSize = 0.55 - t * 0.25;
-      const vertGeo = new THREE.DodecahedronGeometry(vSize, 1);
-      const vPos = vertGeo.attributes.position;
-      for (let v = 0; v < vPos.count; v++) {
-        const y = vPos.getY(v), x = vPos.getX(v);
-        // Dorsal process bump up
-        if (y > vSize * 0.3) vPos.setY(v, y + (y - vSize * 0.3) * 0.8);
-        // Transverse process flare
-        if (Math.abs(x) > vSize * 0.4 && Math.abs(y) < vSize * 0.3) vPos.setX(v, x * 1.4);
-      }
-      vPos.needsUpdate = true;
-      vertGeo.computeVertexNormals();
-      displaceBone(vertGeo, 0.03, 200 + i);
-      applyBoneWeathering(vertGeo, { seed: 200 + i, crackDarkness: 0.18 });
-      const vert = new THREE.Mesh(vertGeo, boneMat);
-      const pos = spineCurve.getPoint(t);
-      vert.position.copy(pos);
-      const tangent = spineCurve.getTangent(t);
-      vert.lookAt(pos.clone().add(tangent));
-      vert.castShadow = true;
-      this.group.add(vert);
-    }
-
-    // Dorsal spines — MASSIVE tall spike-like bone protrusions along spine
-    // THE key silhouette feature. Tallest at shoulders (y≈5-6), taper at head/tail
-    const dorsalCount = 18;
-    for (let i = 0; i < dorsalCount; i++) {
-      const t = i / (dorsalCount - 1);
-      const curveT = t * 0.92 + 0.04;
-      const spt = spineCurve.getPoint(curveT);
-      // Height peaks at shoulders (t≈0.15-0.3), tapers both ways
-      const peakT = 0.22;
-      const sizeFactor = Math.max(0.1, 1 - Math.pow(Math.abs(t - peakT) * 1.6, 0.75));
-      const spikeHeight = 0.6 + sizeFactor * 4.5;
-      const spikeRadius = 0.08 + sizeFactor * 0.3;
-      const spikeGeo = new THREE.ConeGeometry(spikeRadius, spikeHeight, 5);
-      // Slight backward curve
-      const spPos = spikeGeo.attributes.position;
-      for (let v = 0; v < spPos.count; v++) {
-        const y = spPos.getY(v);
-        if (y > 0) spPos.setZ(v, spPos.getZ(v) - y * 0.12);
-      }
-      spPos.needsUpdate = true;
-      spikeGeo.computeVertexNormals();
-      displaceBone(spikeGeo, 0.02, 250 + i);
-      applyBoneWeathering(spikeGeo, { seed: 250 + i, bleachAmount: 0.12 });
-      const spike = new THREE.Mesh(spikeGeo, boneMat);
-      spike.position.set(spt.x, spt.y + spikeHeight * 0.5, spt.z);
-      spike.rotation.x = Math.sin(i * 1.7) * 0.1 - 0.06;
-      spike.rotation.z = Math.sin(i * 2.3) * 0.06;
-      spike.castShadow = true;
-      this.group.add(spike);
-    }
-
-    // ── c) Ribcage — arching UP from ground-level spine ─────────────────
-    // Spine is at y≈1.2-1.5 in rib region, ribs arch up to y≈3-4
-    const ribCount = 7;
-    for (let i = 0; i < ribCount; i++) {
-      const rt = i / (ribCount - 1);
-      const spineT = 0.05 + rt * 0.45;
-      const attachPt = spineCurve.getPoint(spineT);
-      const ribScale = 1 - i * 0.06;
-      const isBrokenRib = i === 4;
-
-      for (const side of [-1, 1]) {
-        const arcAngle = Math.PI * (0.7 - i * 0.02);
-        const sideScale = side === -1 ? ribScale : ribScale * 0.88;
-        const ribGeo = new THREE.TorusGeometry(
-          2.0 * sideScale,
-          0.10 - rt * 0.02,
-          6, 12,
-          isBrokenRib && side === 1 ? arcAngle * 0.45 : arcAngle,
-        );
-        displaceBone(ribGeo, 0.02, 300 + i * 2 + (side > 0 ? 1 : 0));
-        applyBoneWeathering(ribGeo, {
-          seed: 300 + i * 2 + (side > 0 ? 1 : 0),
-          mossAmount: side === -1 ? 0.18 : 0.06,
+          eye.name = `dragon-eye-orb-${side === -1 ? 'L' : 'R'}`;
+          eye.userData.baseY = eyeY;
+          eye.userData.side = side;
+          this.group.add(eye);
         });
-        const rib = new THREE.Mesh(ribGeo, boneMat);
-        rib.position.copy(attachPt);
-        // Ribs arch upward and outward from ground-level spine
-        rib.rotation.y = side * Math.PI / 2;
-        rib.rotation.x = -0.6 - i * 0.03;
-        rib.rotation.z = side * (0.2 + i * 0.02);
-        rib.castShadow = true;
-        this.group.add(rib);
-      }
-    }
-
-    // Sternum/keel bone — lying flat beneath ribcage near ground
-    const keelGeo = new THREE.BoxGeometry(0.6, 0.4, 5, 3, 3, 6);
-    const keelPos = keelGeo.attributes.position;
-    for (let v = 0; v < keelPos.count; v++) {
-      const y = keelPos.getY(v);
-      if (y < 0) keelPos.setX(v, keelPos.getX(v) * (1 + y * 0.3));
-    }
-    keelPos.needsUpdate = true;
-    keelGeo.computeVertexNormals();
-    displaceBone(keelGeo, 0.04, 320);
-    applyBoneWeathering(keelGeo, { seed: 320 });
-    const keel = new THREE.Mesh(keelGeo, boneMat);
-    const ribMidPt = spineCurve.getPoint(0.2);
-    keel.position.set(ribMidPt.x, 0.2, ribMidPt.z);
-    keel.castShadow = true;
-    this.group.add(keel);
-
-    // ── d) Wings — COLLAPSED, drooping down like a dead dragon ──────────
-    // Shoulder at spine level, humerus angles slightly up then everything droops.
-    // Elbow is the highest point (~3.5), forearm slopes down, wrist near ground,
-    // finger bones splay out flat on the ground — the dragon has collapsed here.
-    for (const side of [-1, 1]) {
-      const wingBase = new THREE.Vector3(cp.x + side * 3.0, 1.6, cp.z - 5);
-
-      // Shoulder joint — attached to body near spine height
-      const shoulderGeo = new THREE.SphereGeometry(0.55, 8, 8);
-      displaceBone(shoulderGeo, 0.06, 400 + side);
-      applyBoneWeathering(shoulderGeo, { seed: 400 + side });
-      const shoulder = new THREE.Mesh(shoulderGeo, boneMat);
-      shoulder.position.copy(wingBase);
-      shoulder.castShadow = true;
-      this.group.add(shoulder);
-
-      // Humerus — angles outward and only slightly upward, collapsed posture
-      const humLen = 6.0;
-      const humGeo = new THREE.CylinderGeometry(0.18, 0.32, humLen, 8);
-      const humPos = humGeo.attributes.position;
-      for (let v = 0; v < humPos.count; v++) {
-        const y = humPos.getY(v);
-        const endFactor = Math.max(0, (Math.abs(y) - 2.2) / 0.8);
-        if (endFactor > 0) {
-          humPos.setX(v, humPos.getX(v) * (1 + endFactor * 0.35));
-          humPos.setZ(v, humPos.getZ(v) * (1 + endFactor * 0.35));
-        }
-      }
-      humPos.needsUpdate = true;
-      humGeo.computeVertexNormals();
-      displaceBone(humGeo, 0.03, 405 + side);
-      applyBoneWeathering(humGeo, { seed: 405 + side });
-      const humerus = new THREE.Mesh(humGeo, boneMat);
-      humerus.position.set(wingBase.x + side * 2.5, 2.2, wingBase.z + 0.3);
-      humerus.rotation.z = side * 1.1; // Nearly horizontal, sweeping outward
-      humerus.rotation.x = 0.1;
-      humerus.castShadow = true;
-      this.group.add(humerus);
-
-      // Elbow joint — highest point of the collapsed wing, only ~3.5 high
-      const elbowPt = new THREE.Vector3(wingBase.x + side * 5.5, 3.5, wingBase.z + 0.5);
-      const elbowGeo = new THREE.SphereGeometry(0.38, 7, 7);
-      displaceBone(elbowGeo, 0.05, 410 + side);
-      applyBoneWeathering(elbowGeo, { seed: 410 + side });
-      const elbow = new THREE.Mesh(elbowGeo, boneMat);
-      elbow.position.copy(elbowPt);
-      elbow.castShadow = true;
-      this.group.add(elbow);
-
-      // Forearm — droops DOWN from elbow toward the ground
-      const foreLen = 7.0;
-      const forearmGeo = new THREE.CylinderGeometry(0.12, 0.22, foreLen, 7);
-      displaceBone(forearmGeo, 0.025, 415 + side);
-      applyBoneWeathering(forearmGeo, { seed: 415 + side });
-      const forearm = new THREE.Mesh(forearmGeo, boneMat);
-      forearm.position.set(elbowPt.x + side * 3.5, 1.8, elbowPt.z - 0.5);
-      forearm.rotation.z = side * 1.3; // Steep downward slope
-      forearm.rotation.x = -0.1;
-      forearm.castShadow = true;
-      this.group.add(forearm);
-
-      // Wrist joint — near ground, far out to the side
-      const wristPt = new THREE.Vector3(wingBase.x + side * 10.0, 0.4, wingBase.z - 0.5);
-      const wristGeo = new THREE.SphereGeometry(0.3, 6, 6);
-      displaceBone(wristGeo, 0.04, 420 + side);
-      applyBoneWeathering(wristGeo, { seed: 420 + side });
-      const wrist = new THREE.Mesh(wristGeo, boneMat);
-      wrist.position.copy(wristPt);
-      wrist.castShadow = true;
-      this.group.add(wrist);
-
-      // Wing finger bones — 4 long fingers splayed FLAT on ground, fanning out
-      const fingerData = [
-        { len: 8.0, r: 0.10, dx: 3.0, dz: 2.5,  rz: 1.35, rx: 0.05 },
-        { len: 9.5, r: 0.09, dx: 3.5, dz: 0.5,  rz: 1.4,  rx: 0.0 },
-        { len: 8.5, r: 0.07, dx: 3.0, dz: -1.5, rz: 1.45, rx: -0.05 },
-        { len: 6.0, r: 0.05, dx: 2.0, dz: -3.5, rz: 1.5,  rx: -0.1 },
-      ];
-      const fingerTips: THREE.Vector3[] = [];
-      for (let f = 0; f < fingerData.length; f++) {
-        const fd = fingerData[f];
-        const fingerGeo = new THREE.CylinderGeometry(fd.r * 0.4, fd.r, fd.len, 6);
-        // Slight natural curvature
-        const fPos = fingerGeo.attributes.position;
-        for (let v = 0; v < fPos.count; v++) {
-          const y = fPos.getY(v);
-          fPos.setZ(v, fPos.getZ(v) + y * y * 0.006);
-        }
-        fPos.needsUpdate = true;
-        fingerGeo.computeVertexNormals();
-        displaceBone(fingerGeo, 0.015, 430 + side * 10 + f);
-        applyBoneWeathering(fingerGeo, { seed: 430 + side * 10 + f });
-        const finger = new THREE.Mesh(fingerGeo, boneMat);
-        const fx = wristPt.x + side * fd.dx;
-        const fy = 0.12; // Flat on ground
-        const fz = wristPt.z + fd.dz;
-        finger.position.set(fx, fy, fz);
-        finger.rotation.z = side * fd.rz; // Nearly horizontal
-        finger.rotation.x = fd.rx;
-        finger.castShadow = true;
-        this.group.add(finger);
-
-        // Calculate fingertip for membrane
-        const tipX = fx + side * fd.len * 0.45;
-        const tipZ = fz + fd.len * 0.15 * Math.sin(fd.rx);
-        fingerTips.push(new THREE.Vector3(tipX, 0.08, tipZ));
-      }
-
-      // Wing membrane remnants — torn, draped on ground between finger bones
-      const membraneMat = new THREE.MeshBasicMaterial({
-        color: 0x2a1c0e, transparent: true, opacity: 0.14,
-        side: THREE.DoubleSide, depthWrite: false,
       });
-      for (let f = 0; f < fingerTips.length - 1; f++) {
-        const memShape = new THREE.Shape();
-        memShape.moveTo(0, 0);
-        const tip1 = fingerTips[f].clone().sub(wristPt);
-        const tip2 = fingerTips[f + 1].clone().sub(wristPt);
-        memShape.lineTo(tip1.x, tip1.z);
-        memShape.lineTo(tip2.x, tip2.z);
-        memShape.lineTo(0, 0);
-
-        // Torn holes in the membrane
-        const holeSize = 0.5 + f * 0.3;
-        const hx = (tip1.x + tip2.x) * 0.33;
-        const hz = (tip1.z + tip2.z) * 0.33;
-        const hole = new THREE.Path();
-        hole.moveTo(hx - holeSize, hz - holeSize * 0.5);
-        hole.bezierCurveTo(hx - holeSize * 0.2, hz + holeSize * 0.7, hx + holeSize * 0.4, hz + holeSize * 0.5, hx + holeSize, hz - holeSize * 0.2);
-        hole.bezierCurveTo(hx + holeSize * 0.3, hz - holeSize * 0.8, hx - holeSize * 0.4, hz - holeSize * 0.7, hx - holeSize, hz - holeSize * 0.5);
-        memShape.holes.push(hole);
-
-        const memGeo = new THREE.ShapeGeometry(memShape, 3);
-        const membrane = new THREE.Mesh(memGeo, membraneMat);
-        // Lay membrane flat on ground (rotate to XZ plane)
-        membrane.rotation.x = -Math.PI / 2;
-        membrane.position.set(wristPt.x, 0.06, wristPt.z);
-        this.group.add(membrane);
-      }
-
-      // Sinew strips — hanging limply from elbow/forearm area, touching ground
-      const stripMat = new THREE.MeshBasicMaterial({
-        color: 0x3a2a18, transparent: true, opacity: 0.22,
-        side: THREE.DoubleSide, depthWrite: false,
-      });
-      for (let s = 0; s < 5; s++) {
-        const stripLen = 2.0 + Math.sin(s * 2.1 + side) * 0.8;
-        const stripW = 0.12 + s * 0.02;
-        const stripGeo = new THREE.PlaneGeometry(stripW, stripLen, 1, 6);
-        const stP = stripGeo.attributes.position;
-        for (let v = 0; v < stP.count; v++) {
-          const y = stP.getY(v);
-          stP.setX(v, stP.getX(v) + Math.sin(y * 3.0 + s) * 0.08);
-        }
-        stP.needsUpdate = true;
-        const strip = new THREE.Mesh(stripGeo, stripMat);
-        // Strips drape from elbow-to-forearm area down toward ground
-        const t = s / 4;
-        const hangX = elbowPt.x + side * (t * 3.5);
-        const hangY = elbowPt.y * (1 - t) * 0.5 + 0.3;
-        const hangZ = elbowPt.z - 0.5 + s * 0.4;
-        strip.position.set(hangX, hangY, hangZ);
-        strip.rotation.z = Math.sin(s * 1.4) * 0.2;
-        strip.name = `dragon-strip-${side > 0 ? 'R' : 'L'}-${s}`;
-        this.group.add(strip);
-      }
     }
 
-    // ── e) Legs — front extended forward flat, rear simplified ──────────
-    // Front legs lying flat on ground, extended forward toward player
-    for (const side of [-1, 1]) {
-      const legBase = new THREE.Vector3(cp.x + side * 2.5, 0, cp.z - 1);
-
-      // Scapula/shoulder — flat on ground connecting to body
-      const scapGeo = new THREE.BoxGeometry(1.2, 0.3, 2.0, 4, 2, 4);
-      displaceBone(scapGeo, 0.03, 500 + side);
-      applyBoneWeathering(scapGeo, { seed: 500 + side });
-      const scap = new THREE.Mesh(scapGeo, boneMat);
-      scap.position.set(legBase.x + side * 0.5, 0.2, legBase.z - 1);
-      scap.rotation.y = side * 0.2;
-      scap.castShadow = true;
-      this.group.add(scap);
-
-      // Upper leg bone — lying flat, extending forward
-      const femurGeo = new THREE.CylinderGeometry(0.18, 0.28, 3.0, 7);
-      const fmPos = femurGeo.attributes.position;
-      for (let v = 0; v < fmPos.count; v++) {
-        const y = fmPos.getY(v);
-        const endF = Math.max(0, (Math.abs(y) - 1.2) / 0.3);
-        if (endF > 0) {
-          fmPos.setX(v, fmPos.getX(v) * (1 + endF * 0.25));
-          fmPos.setZ(v, fmPos.getZ(v) * (1 + endF * 0.25));
-        }
-      }
-      fmPos.needsUpdate = true;
-      femurGeo.computeVertexNormals();
-      displaceBone(femurGeo, 0.03, 505 + side);
-      applyBoneWeathering(femurGeo, { seed: 505 + side });
-      const femur = new THREE.Mesh(femurGeo, boneMat);
-      femur.position.set(legBase.x + side * 1.0, 0.2, legBase.z + 1.5);
-      femur.rotation.z = Math.PI / 2;
-      femur.rotation.y = side * 0.25;
-      femur.castShadow = true;
-      this.group.add(femur);
-
-      // Lower leg bone — continuing forward on ground
-      const tibGeo = new THREE.CylinderGeometry(0.12, 0.18, 2.5, 6);
-      displaceBone(tibGeo, 0.025, 510 + side);
-      applyBoneWeathering(tibGeo, { seed: 510 + side });
-      const tibia = new THREE.Mesh(tibGeo, boneMat);
-      tibia.position.set(legBase.x + side * 1.5, 0.15, legBase.z + 3.5);
-      tibia.rotation.z = Math.PI / 2;
-      tibia.rotation.y = side * 0.3;
-      tibia.castShadow = true;
-      this.group.add(tibia);
-
-      // Claws — spread out on ground, extended forward
-      for (let c = 0; c < 3; c++) {
-        const clawGeo = new THREE.ConeGeometry(0.07, 0.55, 4);
-        displaceBone(clawGeo, 0.01, 520 + side * 10 + c);
-        applyBoneWeathering(clawGeo, { seed: 520 + side * 10 + c, baseColor: [0.75, 0.70, 0.55] });
-        const claw = new THREE.Mesh(clawGeo, boneMat);
-        claw.position.set(
-          legBase.x + side * (1.8 + c * 0.25),
-          0.08,
-          legBase.z + 5.0 + (c - 1) * 0.3,
-        );
-        claw.rotation.x = -Math.PI / 2 + 0.2;
-        claw.rotation.y = side * (0.1 + (c - 1) * 0.15);
-        claw.castShadow = true;
-        this.group.add(claw);
-      }
-    }
-
-    // Rear legs (partially buried, splayed to sides)
-    for (const side of [-1, 1]) {
-      const rearBase = new THREE.Vector3(cp.x + side * 3.5, 0, cp.z - 13);
-      const rFemurGeo = new THREE.CylinderGeometry(0.16, 0.24, 2.5, 6);
-      displaceBone(rFemurGeo, 0.03, 550 + side);
-      applyBoneWeathering(rFemurGeo, { seed: 550 + side });
-      const rFemur = new THREE.Mesh(rFemurGeo, boneMat);
-      rFemur.position.set(rearBase.x, 0.2, rearBase.z);
-      rFemur.rotation.z = Math.PI / 2;
-      rFemur.rotation.y = side * 0.4;
-      rFemur.castShadow = true;
-      this.group.add(rFemur);
-
-      const rTibGeo = new THREE.CylinderGeometry(0.10, 0.16, 2.0, 6);
-      displaceBone(rTibGeo, 0.025, 555 + side);
-      applyBoneWeathering(rTibGeo, { seed: 555 + side });
-      const rTibia = new THREE.Mesh(rTibGeo, boneMat);
-      rTibia.position.set(rearBase.x + side * 1.5, 0.15, rearBase.z + 0.5);
-      rTibia.rotation.z = Math.PI / 2;
-      rTibia.rotation.y = side * 0.3;
-      rTibia.castShadow = true;
-      this.group.add(rTibia);
-    }
-
-    // ── f) Tail — close to ground, curving to one side ──────────────────
-    const tailCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(cp.x, 0.5, cp.z - 20),
-      new THREE.Vector3(cp.x + 2.0, 0.4, cp.z - 23),
-      new THREE.Vector3(cp.x + 3.5, 0.3, cp.z - 25),
-      new THREE.Vector3(cp.x + 3.0, 0.2, cp.z - 27),
-      new THREE.Vector3(cp.x + 1.5, 0.15, cp.z - 29),
-    ]);
-    const tailCount = 12;
-    for (let i = 0; i < tailCount; i++) {
-      const t = i / (tailCount - 1);
-      const size = Math.max(0.06, 0.35 - t * 0.22);
-      const tailGeo = new THREE.DodecahedronGeometry(size, 0);
-      const tPos = tailGeo.attributes.position;
-      for (let v = 0; v < tPos.count; v++) {
-        const y = tPos.getY(v);
-        if (y < -size * 0.3) tPos.setY(v, y * 1.3);
-        else if (y > size * 0.4) tPos.setY(v, y * 0.7);
-      }
-      tPos.needsUpdate = true;
-      tailGeo.computeVertexNormals();
-      displaceBone(tailGeo, 0.02, 600 + i);
-      applyBoneWeathering(tailGeo, { seed: 600 + i, mossAmount: 0.15 });
-      const tailVert = new THREE.Mesh(tailGeo, boneMat);
-      const tailPos = tailCurve.getPoint(t);
-      tailVert.position.copy(tailPos);
-      const tangent = tailCurve.getTangent(t);
-      tailVert.lookAt(tailPos.clone().add(tangent));
-      tailVert.castShadow = true;
-      this.group.add(tailVert);
-    }
-
-    // Tail tip — spade/club shape lying flat
-    const tipPt = tailCurve.getPoint(1);
-    const spadeGeo = new THREE.DodecahedronGeometry(0.3, 1);
-    const spadePos = spadeGeo.attributes.position;
-    for (let v = 0; v < spadePos.count; v++) {
-      spadePos.setZ(v, spadePos.getZ(v) * 0.3);
-      spadePos.setX(v, spadePos.getX(v) * (1 + Math.abs(spadePos.getY(v)) * 0.5));
-    }
-    spadePos.needsUpdate = true;
-    spadeGeo.computeVertexNormals();
-    displaceBone(spadeGeo, 0.03, 650);
-    applyBoneWeathering(spadeGeo, { seed: 650, baseColor: [0.78, 0.73, 0.58] });
-    const spade = new THREE.Mesh(spadeGeo, boneMat);
-    spade.position.copy(tipPt);
-    const tipTangent = tailCurve.getTangent(1);
-    spade.lookAt(tipPt.clone().add(tipTangent));
-    spade.castShadow = true;
-    this.group.add(spade);
-
-    // ── g) Atmosphere — shadow, mist, dust, fog ─────────────────────────
-    // Ground shadow ellipse under entire skeleton
-    const shadowGeo = new THREE.PlaneGeometry(16, 35);
-    const shadow = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({
-      color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false,
-    }));
-    shadow.rotation.x = -Math.PI / 2;
-    shadow.position.set(cp.x + 1, 0.02, cp.z - 12);
-    this.group.add(shadow);
-
-    // Bone fragments scattered around the skeleton
-    const fragRand = boneRand(700);
-    for (let i = 0; i < 10; i++) {
-      const angle = fragRand() * Math.PI * 2;
-      const dist = 2 + fragRand() * 7;
-      const fragGeo = new THREE.IcosahedronGeometry(0.08 + fragRand() * 0.15, 0);
-      displaceBone(fragGeo, 0.04, 700 + i);
-      applyBoneWeathering(fragGeo, { seed: 700 + i });
-      const frag = new THREE.Mesh(fragGeo, boneMat);
-      frag.position.set(
-        cp.x + Math.cos(angle) * dist,
-        0.04,
-        cp.z + Math.sin(angle) * dist * 0.6 - 8,
-      );
-      frag.rotation.set(fragRand() * Math.PI, fragRand() * Math.PI, 0);
-      this.group.add(frag);
-    }
-
-    // Mist planes — eerie green mist billowing out from the gaping mouth
+    // Mist planes — eerie green mist
     for (let i = 0; i < 5; i++) {
       const mistGeo = new THREE.PlaneGeometry(3.5 + Math.sin(i * 1.5) * 1.5, 1.5 + Math.cos(i * 0.8) * 0.6);
       const mist = new THREE.Mesh(mistGeo, new THREE.MeshBasicMaterial({
-        color: 0x44aa66, transparent: true, opacity: 0.10 + i * 0.015,
+        color: 0xaa4444, transparent: true, opacity: 0.10 + i * 0.015,
         depthWrite: false, side: THREE.DoubleSide,
       }));
       mist.name = `dragon-mist-${i}`;
@@ -1982,11 +662,11 @@ export class HubWorld {
       this.group.add(dust);
     }
 
-    // Inner cave fog planes — inside the skull maw
+    // Inner cave fog planes
     for (let i = 0; i < 3; i++) {
       const fogGeo = new THREE.PlaneGeometry(4, 2.5);
       const fog = new THREE.Mesh(fogGeo, new THREE.MeshBasicMaterial({
-        color: 0x112211, transparent: true, opacity: 0.15 - i * 0.03,
+        color: 0x221111, transparent: true, opacity: 0.15 - i * 0.03,
         depthWrite: false, side: THREE.DoubleSide,
       }));
       fog.name = `dragon-cave-fog-${i}`;
@@ -1995,20 +675,56 @@ export class HubWorld {
       this.group.add(fog);
     }
 
-    // ── h) Inner glow — eerie light from within the skull maw ───────────
-    const innerGlow = new THREE.PointLight(0x22ff44, 3, 14);
-    innerGlow.position.set(cp.x, 1.5, cp.z + 0.5);
+    // Cave glow — single merged light for performance
+    const innerGlow = new THREE.PointLight(0xff2200, 3, 14);
+    innerGlow.position.set(cp.x, 1.5, cp.z + 1.0);
     innerGlow.name = 'dragon-inner-glow';
     this.group.add(innerGlow);
 
-    const dungeonGlow = new THREE.PointLight(0x33cc55, 2.0, 10);
-    dungeonGlow.position.set(cp.x, 1.0, cp.z + 2.0);
-    dungeonGlow.name = 'dragon-dungeon-glow';
-    this.group.add(dungeonGlow);
+    // ── Dark Forest portal inside the mouth ──────────────────────────
+    const portalY = 2.2;
+    const portalZ = cp.z + 1.5;
+    const portalRadius = 1.8;
 
-    // ── i) Sign — 'THE DEPTHS' above the skull ─────────────────────────
-    const sign = this.createTextSign('THE DEPTHS', 0x88ffaa);
-    sign.position.set(cp.x, 7.0, cp.z + 1.0);
+    // Portal surface — swirling disc
+    const portalGeo = new THREE.CircleGeometry(portalRadius - 0.15, 32);
+    const portalMat = new THREE.MeshBasicMaterial({
+      color: 0x551111,
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const portalDisc = new THREE.Mesh(portalGeo, portalMat);
+    portalDisc.position.set(cp.x, portalY, portalZ);
+    portalDisc.rotation.x = -Math.PI * 0.1;
+    portalDisc.name = 'dragon-portal-disc';
+    this.group.add(portalDisc);
+
+    // Inner swirl layer (brighter, slightly smaller, rotates opposite)
+    const swirlGeo = new THREE.CircleGeometry(portalRadius * 0.6, 24);
+    const swirlMat = new THREE.MeshBasicMaterial({
+      color: 0xff4422,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const swirl = new THREE.Mesh(swirlGeo, swirlMat);
+    swirl.position.set(cp.x, portalY, portalZ + 0.05);
+    swirl.rotation.x = -Math.PI * 0.1;
+    swirl.name = 'dragon-portal-swirl';
+    this.group.add(swirl);
+
+    // Portal glow light
+    const portalLight = new THREE.PointLight(0xff2200, 4, 8);
+    portalLight.position.set(cp.x, portalY, portalZ + 0.5);
+    portalLight.name = 'dragon-portal-light';
+    this.group.add(portalLight);
+
+    // Sign — 'DARK FOREST' above the skull
+    const sign = this.createTextSign('DARK FOREST', 0xff8866);
+    sign.position.set(cp.x, 10.0, cp.z + 2.0);
     this.group.add(sign);
   }
 
@@ -2019,8 +735,9 @@ export class HubWorld {
     const npcs = [
       {
         name: 'Elder Mika',
-        position: new THREE.Vector3(5, 0, 3),
+        position: new THREE.Vector3(12, 0, 7),
         color: 0x6644aa,
+        isElder: true,
         dialog: [
           'Welcome, adventurer! This is the Hub Town.',
           'The Dark Forest portal leads to dangerous creatures...',
@@ -2029,7 +746,7 @@ export class HubWorld {
       },
       {
         name: 'Gernal',
-        position: new THREE.Vector3(-12, 0, -5),
+        position: new THREE.Vector3(-23, 0, -12),
         color: 0xaa4422,
         isShopkeeper: true,
         dialog: [
@@ -2041,12 +758,24 @@ export class HubWorld {
       },
       {
         name: 'Scout Aino',
-        position: new THREE.Vector3(3, 0, -18),
+        position: new THREE.Vector3(3, 0, -25),
         color: 0x22aa66,
+        isScout: true,
         dialog: [
           'The Dark Forest is just the beginning...',
           'They say an Ancient Treant guards the deepest grove.',
           'Be careful of the Giant Spiders - they are fast!',
+        ],
+      },
+      {
+        name: 'Battlemaster Toivo',
+        position: new THREE.Vector3(18, 0, -6),
+        color: 0xcc2222,
+        isBattlemaster: true,
+        dialog: [
+          'The Arena awaits, warrior! Prove your strength against other adventurers.',
+          'Step through the gate if you dare... only the strongest survive.',
+          'Victory in the arena brings glory and rare rewards!',
         ],
       },
     ];
@@ -2054,6 +783,12 @@ export class HubWorld {
     for (const npc of npcs) {
       if ((npc as any).isShopkeeper) {
         this.createGernalMesh(npc.position);
+      } else if ((npc as any).isScout) {
+        this.createScoutMesh(npc.name, npc.position);
+      } else if ((npc as any).isBattlemaster) {
+        this.createBattlemasterMesh(npc.name, npc.position);
+      } else if ((npc as any).isElder) {
+        this.createElderMesh(npc.name, npc.position);
       } else {
         this.createNPCMesh(npc.name, npc.position, npc.color);
       }
@@ -2068,6 +803,55 @@ export class HubWorld {
 
   private createGernalMesh(pos: THREE.Vector3) {
     const g = new THREE.Group();
+    g.position.copy(pos);
+    g.name = 'npc-Gernal';
+
+    // Floating name + "!" indicator
+    const canvas2 = document.createElement('canvas');
+    canvas2.width = 256;
+    canvas2.height = 96;
+    const ctx2 = canvas2.getContext('2d')!;
+    ctx2.font = 'bold 40px Arial';
+    ctx2.textAlign = 'center';
+    ctx2.fillStyle = '#FFD700';
+    ctx2.fillText('!', 128, 35);
+    ctx2.font = 'bold 22px Arial';
+    ctx2.fillStyle = '#ffffff';
+    ctx2.strokeStyle = '#000000';
+    ctx2.lineWidth = 3;
+    ctx2.strokeText('Gernal', 128, 75);
+    ctx2.fillText('Gernal', 128, 75);
+    const tex2 = new THREE.CanvasTexture(canvas2);
+    const spriteMat2 = new THREE.SpriteMaterial({ map: tex2, transparent: true });
+    const sprite2 = new THREE.Sprite(spriteMat2);
+    sprite2.position.y = 3.3;
+    sprite2.scale.set(2.5, 0.9, 1);
+    g.add(sprite2);
+    this.group.add(g);
+
+    // Load GLB model
+    import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      const loader = new GLTFLoader();
+      loader.load('/models/old_man_character_concept_meshy.glb', (gltf) => {
+        const model = gltf.scene;
+        // Strip environment spheres (huge meshes baked in by Meshy/Blender)
+        this.stripEnvSpheres(model);
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) { child.castShadow = true; child.receiveShadow = true; }
+        });
+        downscaleTextures(model);
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const scale = 2.5 / Math.max(size.y, 0.01);
+        model.scale.setScalar(scale);
+        model.updateMatrixWorld(true);
+        const groundBox = new THREE.Box3().setFromObject(model);
+        model.position.y -= groundBox.min.y;
+        g.add(model);
+        console.log(`[HubWorld] Gernal GLB loaded, scale: ${scale.toFixed(2)}`);
+      }, undefined, (err) => { console.error('[HubWorld] Failed to load Gernal GLB:', err); });
+    });
+    return; // Skip old procedural mesh below
 
     const skinMat = new THREE.MeshStandardMaterial({ color: 0xd4a574, roughness: 0.75 });
     const skinDark = new THREE.MeshStandardMaterial({ color: 0xc49464, roughness: 0.8 });
@@ -2593,7 +1377,208 @@ export class HubWorld {
 
     npcGroup.position.copy(pos);
     npcGroup.name = `npc-${name}`;
+    // Scale to match player height (3m) — base NPC is ~2.5m
+    npcGroup.scale.setScalar(1.2);
     this.group.add(npcGroup);
+  }
+
+  private createElderMesh(name: string, pos: THREE.Vector3) {
+    const npcGroup = new THREE.Group();
+    npcGroup.position.copy(pos);
+    npcGroup.name = `npc-${name}`;
+
+    // Face toward spawn altar
+    npcGroup.lookAt(0, 0, 15);
+
+    // Floating name + "!" indicator
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d')!;
+    ctx.font = 'bold 40px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText('!', 128, 35);
+    ctx.font = 'bold 22px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    ctx.strokeText(name, 128, 75);
+    ctx.fillText(name, 128, 75);
+    const tex = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.position.y = 3.2;
+    sprite.scale.set(2.5, 0.9, 1);
+    npcGroup.add(sprite);
+
+    this.group.add(npcGroup);
+
+    // Load GLB model
+    import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      const loader = new GLTFLoader();
+      loader.load('/models/elder_moonseer.glb', (gltf) => {
+        const model = gltf.scene;
+        // Strip environment spheres (huge meshes baked in by Meshy/Blender)
+        this.stripEnvSpheres(model);
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        downscaleTextures(model);
+
+        // Scale to match player height (3m)
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const scale = 3.0 / Math.max(size.y, 0.01);
+        model.scale.setScalar(scale);
+
+        // Ground the model
+        model.updateMatrixWorld(true);
+        const groundBox = new THREE.Box3().setFromObject(model);
+        model.position.y -= groundBox.min.y;
+
+        npcGroup.add(model);
+        console.log(`[HubWorld] Elder Mika GLB loaded, scale: ${scale.toFixed(2)}`);
+      }, undefined, (err) => {
+        console.error('[HubWorld] Failed to load Elder Mika GLB:', err);
+      });
+    });
+  }
+
+  private createScoutMesh(name: string, pos: THREE.Vector3) {
+    const npcGroup = new THREE.Group();
+    npcGroup.position.copy(pos);
+    npcGroup.name = `npc-${name}`;
+
+    // Floating name + "!" indicator
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d')!;
+    ctx.font = 'bold 40px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText('!', 128, 35);
+    ctx.font = 'bold 22px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    ctx.strokeText(name, 128, 75);
+    ctx.fillText(name, 128, 75);
+    const tex = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.position.y = 3.2;
+    sprite.scale.set(2.5, 0.9, 1);
+    npcGroup.add(sprite);
+
+    this.group.add(npcGroup);
+
+    // Load GLB model
+    import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      const loader = new GLTFLoader();
+      loader.load('/models/scout_aino.glb', (gltf) => {
+        const model = gltf.scene;
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        downscaleTextures(model);
+
+        // Scale to match player height (3m)
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const scale = 3.0 / Math.max(size.y, 0.01);
+        model.scale.setScalar(scale);
+
+        // Ground the model
+        model.updateMatrixWorld(true);
+        const groundBox = new THREE.Box3().setFromObject(model);
+        model.position.y -= groundBox.min.y;
+
+        // Arm rest pose (same as player character)
+        model.traverse((child) => {
+          if (!(child as THREE.Bone).isBone) return;
+          switch (child.name) {
+            case 'mixamorigLeftArm': child.rotation.set(1.0, 0, 0.3); break;
+            case 'mixamorigRightArm': child.rotation.set(1.0, 0, -0.3); break;
+            case 'mixamorigLeftForeArm': child.rotation.set(0, 0, 0); break;
+            case 'mixamorigRightForeArm': child.rotation.set(0, 0, 0); break;
+          }
+        });
+
+        npcGroup.add(model);
+        console.log(`[HubWorld] Scout Aino GLB loaded, scale: ${scale.toFixed(2)}`);
+      }, undefined, (err) => {
+        console.error('[HubWorld] Failed to load Scout Aino GLB:', err);
+      });
+    });
+  }
+
+  private createBattlemasterMesh(name: string, pos: THREE.Vector3) {
+    const npcGroup = new THREE.Group();
+    npcGroup.position.copy(pos);
+    npcGroup.name = `npc-${name}`;
+
+    // Floating name + "!" indicator
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d')!;
+    ctx.font = 'bold 40px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText('!', 128, 35);
+    ctx.font = 'bold 22px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    ctx.strokeText(name, 128, 75);
+    ctx.fillText(name, 128, 75);
+    const tex = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.position.y = 3.5;
+    sprite.scale.set(2.5, 0.9, 1);
+    npcGroup.add(sprite);
+
+    this.group.add(npcGroup);
+
+    // Load GLB model
+    import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      const loader = new GLTFLoader();
+      loader.load('/models/knight_artorias.glb', (gltf) => {
+        const model = gltf.scene;
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        downscaleTextures(model);
+
+        // Scale to NPC height (~3m for a knight + wolf)
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const scale = 3.0 / Math.max(size.y, 0.01);
+        model.scale.setScalar(scale);
+
+        // Ground the model
+        model.updateMatrixWorld(true);
+        const groundBox = new THREE.Box3().setFromObject(model);
+        model.position.y -= groundBox.min.y;
+
+        npcGroup.add(model);
+        console.log(`[HubWorld] Battlemaster Toivo GLB loaded, scale: ${scale.toFixed(2)}`);
+      }, undefined, (err) => {
+        console.error('[HubWorld] Failed to load Battlemaster Toivo GLB:', err);
+      });
+    });
   }
 
   private buildSpawnAltar() {
@@ -2714,10 +1699,6 @@ export class HubWorld {
       crystal.name = 'altar-crystal';
       altarGroup.add(crystal);
 
-      // Crystal glow light
-      const cLight = new THREE.PointLight(0x44ccff, 0.8, 6);
-      cLight.position.set(px, 3.85, pz);
-      altarGroup.add(cLight);
     }
 
     // --- Central altar stone (the main altar piece) ---
@@ -2819,13 +1800,13 @@ export class HubWorld {
       // Fountain plaza corners (4 symmetrical)
       [5.5, 5.5], [-5.5, 5.5], [5.5, -5.5], [-5.5, -5.5],
       // Path to forest portal
-      [1.5, -14], [-1.5, -14], [1.5, -21], [-1.5, -21],
+      [1.5, -30], [-1.5, -30], [1.5, -45], [-1.5, -45],
       // Near shop entrance
-      [-10, -2], [-14, -2],
+      [-16, 9], [-20, 4],
       // Near PvP arena entrance
-      [12, -6], [12, -10],
+      [27, -14], [27, -22],
       // Near NPCs — Elder Mika, Scout Aino
-      [7, 3], [5, -16],
+      [14, 7], [7, -38],
     ];
     for (const [x, z] of lanternPositions) {
       this.createLantern(x, z);
@@ -2845,27 +1826,40 @@ export class HubWorld {
 
   private brazierIndex = 0;
 
+  private pilarCache: { scene: THREE.Group; yOffset: number } | null = null;
+  private pilarPending: ((cache: { scene: THREE.Group; yOffset: number }) => void)[] = [];
+
+  private getPilarModel(cb: (cache: { scene: THREE.Group; yOffset: number }) => void) {
+    if (this.pilarCache) { cb(this.pilarCache); return; }
+    this.pilarPending.push(cb);
+    if (this.pilarPending.length > 1) return; // already loading
+    import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      const loader = new GLTFLoader();
+      loader.load('/models/pilar.glb', (gltf) => {
+        const base = gltf.scene;
+        downscaleTextures(base);
+        const box = new THREE.Box3().setFromObject(base);
+        const size = box.getSize(new THREE.Vector3());
+        const pillarScale = 1.4 / Math.max(size.y, 0.01);
+        base.scale.setScalar(pillarScale);
+        base.updateMatrixWorld(true);
+        const gb = new THREE.Box3().setFromObject(base);
+        this.pilarCache = { scene: base, yOffset: -gb.min.y };
+        for (const fn of this.pilarPending) fn(this.pilarCache);
+        this.pilarPending = [];
+      });
+    });
+  }
+
   private createLantern(x: number, z: number) {
     const idx = this.brazierIndex++;
 
-    // Stone pillar base — tapered, rough stone look
-    const baseMat = new THREE.MeshStandardMaterial({ color: 0x555550, roughness: 0.95, metalness: 0.05 });
-
-    // Square plinth
-    const plinth = new THREE.Mesh(
-      new THREE.BoxGeometry(0.6, 0.2, 0.6),
-      baseMat,
-    );
-    plinth.position.set(x, 0.1, z);
-    this.group.add(plinth);
-
-    // Tapered pillar
-    const pillar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.22, 1.2, 6),
-      baseMat,
-    );
-    pillar.position.set(x, 0.8, z);
-    this.group.add(pillar);
+    // Load pillar GLB once, clone for each lantern
+    this.getPilarModel(({ scene, yOffset }) => {
+      const model = scene.clone();
+      model.position.set(x, yOffset, z);
+      this.group.add(model);
+    });
 
     // Bowl (open-top brazier)
     const bowlOuter = new THREE.Mesh(
@@ -2913,11 +1907,30 @@ export class HubWorld {
       this.group.add(flame);
     }
 
-    // Warm point light
-    const light = new THREE.PointLight(0xff8833, 0.6, 8);
-    light.position.set(x, 2.2, z);
-    light.name = `brazier-light-${idx}`;
-    this.group.add(light);
+    // Warm glow — use emissive only, no PointLight for performance
+    // (14 braziers × 1 PointLight each was a major perf hit)
+  }
+
+  /**
+   * Remove oversized meshes from a loaded GLB model.
+   * Meshy/Blender exports often include a giant environment sphere.
+   */
+  private stripEnvSpheres(model: THREE.Group) {
+    const toRemove: THREE.Object3D[] = [];
+    model.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        mesh.geometry.computeBoundingSphere();
+        const bs = mesh.geometry.boundingSphere;
+        if (bs && bs.radius > 50) {
+          console.log(`[HubWorld] Stripped oversized mesh: "${mesh.name}", radius: ${bs.radius.toFixed(0)}`);
+          toRemove.push(mesh);
+        }
+      }
+    });
+    for (const obj of toRemove) {
+      obj.removeFromParent();
+    }
   }
 
   private buildRocks() {
@@ -2925,45 +1938,45 @@ export class HubWorld {
     let seed = 42;
     const rand = () => { seed = (seed * 16807 + 0) % 2147483647; return (seed - 1) / 2147483646; };
 
-    // Areas to avoid: fountain (0,0 r4), paths (width ~3), shop (-12,-5), pvp (15,-8), portal (0,-25), spawn altar (0,12)
+    // Areas to avoid: fountain (0,0 r4), paths, shop (-27,-12), pvp (33,-18), portal (0,-55), spawn (0,16)
     const isOnPath = (x: number, z: number): boolean => {
       // North path to portal
-      if (Math.abs(x) < 2.5 && z < 0 && z > -30) return true;
+      if (Math.abs(x) < 2.5 && z < 0 && z > -60) return true;
       // West to shop (curved path — sample 10 points along curve)
       const shopPts = [
-        [0, 0], [-2, -0.1], [-4, -0.3], [-6, -0.5],
-        [-8, -0.9], [-10, -1.4], [-11.2, -2],
-        [-12, -2.8], [-12, -3.8], [-12, -5],
+        [0, 0], [-6, -0.3], [-12, -0.8], [-18, -1.5],
+        [-24, -2.5], [-30, -3.5], [-33, -5],
+        [-35, -7], [-35, -9.5], [-35, -12],
       ];
       for (const sp of shopPts) {
         if (Math.sqrt((x - sp[0]) ** 2 + (z - sp[1]) ** 2) < 2.5) return true;
       }
       // East to pvp
-      const t2 = Math.max(0, Math.min(1, (x * 18 + z * -8) / (324 + 64)));
-      const px2 = 18 * t2, pz2 = -8 * t2;
+      const t2 = Math.max(0, Math.min(1, (x * 38 + z * -18) / (1444 + 324)));
+      const px2 = 38 * t2, pz2 = -18 * t2;
       if (Math.sqrt((x - px2) ** 2 + (z - pz2) ** 2) < 2.5) return true;
       // South spawn path
-      if (Math.abs(x) < 2.5 && z > 0 && z < 16) return true;
+      if (Math.abs(x) < 2.5 && z > 0 && z < 24) return true;
       return false;
     };
 
     const isBlocked = (x: number, z: number): boolean => {
       const d = Math.sqrt(x * x + z * z);
       if (d < 6) return true; // fountain/plaza
-      if (d > 50) return true; // too far out
+      if (d > 75) return true; // too far out
       if (isOnPath(x, z)) return true;
       // Shop area
-      if (x > -16 && x < -8 && z > -9 && z < -1) return true;
+      if (x > -39 && x < -31 && z > -16 && z < -8) return true;
       // PvP arena
-      if (x > 11 && x < 20 && z > -13 && z < -3) return true;
+      if (x > 28 && x < 39 && z > -23 && z < -13) return true;
       // Portal area
-      if (Math.abs(x) < 5 && z < -20 && z > -30) return true;
-      // Spawn altar
-      if (Math.abs(x) < 4 && z > 10 && z < 18) return true;
+      if (Math.abs(x) < 5 && z < -48 && z > -62) return true;
+      // Spawn area
+      if (Math.abs(x) < 4 && z > 14 && z < 24) return true;
       // NPCs
-      if (Math.sqrt((x - 8) ** 2 + (z - 5) ** 2) < 3) return true;
-      if (Math.sqrt((x - 6) ** 2 + (z + 18) ** 2) < 3) return true;
-      if (Math.sqrt((x + 4) ** 2 + (z + 4) ** 2) < 3) return true;
+      if (Math.sqrt((x - 12) ** 2 + (z - 7) ** 2) < 3) return true;
+      if (Math.sqrt((x - 5) ** 2 + (z + 40) ** 2) < 3) return true;
+      if (Math.sqrt((x + 8) ** 2 + (z + 8) ** 2) < 3) return true;
       return false;
     };
 
@@ -3091,14 +2104,14 @@ export class HubWorld {
     const sun = new THREE.DirectionalLight(0xffecd2, 1.5);
     sun.position.set(25, 40, 15);
     sun.castShadow = true;
-    sun.shadow.mapSize.width = 4096;
-    sun.shadow.mapSize.height = 4096;
+    sun.shadow.mapSize.width = 2048;
+    sun.shadow.mapSize.height = 2048;
     sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 120;
-    sun.shadow.camera.left = -45;
-    sun.shadow.camera.right = 45;
-    sun.shadow.camera.top = 45;
-    sun.shadow.camera.bottom = -45;
+    sun.shadow.camera.far = 100;
+    sun.shadow.camera.left = -40;
+    sun.shadow.camera.right = 40;
+    sun.shadow.camera.top = 40;
+    sun.shadow.camera.bottom = -40;
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.02;
     sun.shadow.radius = 2; // softer shadow edges with PCFSoft
@@ -3159,11 +2172,6 @@ export class HubWorld {
         }
       }
       // Light intensity flicker
-      const light = this.group.getObjectByName(`brazier-light-${i}`);
-      if (light) {
-        const phase = i * 1.9;
-        (light as THREE.PointLight).intensity = 0.5 + Math.sin(time * 5 + phase) * 0.15 + Math.sin(time * 8.3 + phase) * 0.08;
-      }
       // Ember glow pulse
       const embers = this.group.getObjectByName(`brazier-embers-${i}`);
       if (embers) {
@@ -3173,17 +2181,40 @@ export class HubWorld {
     }
 
         // ── Dragon skeleton entrance animations ─────────────────────────
-    // Eye glow pulse
+    // Eye glow pulse + eyeball subtle movement
     for (const side of ['L', 'R']) {
+      const phase = side === 'L' ? 0 : 1;
       const eyeLight = this.group.getObjectByName(`dragon-eye-${side}`);
       if (eyeLight) {
-        (eyeLight as THREE.PointLight).intensity = 0.8 + Math.sin(time * 1.5 + (side === 'L' ? 0 : 1)) * 0.4;
+        (eyeLight as THREE.PointLight).intensity = 2.0 + Math.sin(time * 1.5 + phase) * 1.0;
       }
       const eyeOrb = this.group.getObjectByName(`dragon-eye-orb-${side}`);
       if (eyeOrb) {
-        const eMat = (eyeOrb as THREE.Mesh).material as THREE.MeshBasicMaterial;
-        eMat.opacity = 0.5 + Math.sin(time * 1.5 + (side === 'L' ? 0 : 1)) * 0.3;
+        const baseY = eyeOrb.userData.baseY ?? 4.5;
+        // Subtle look-around: slow random-ish rotation
+        eyeOrb.rotation.x = Math.sin(time * 0.4 + phase * 2.0) * 0.12;
+        eyeOrb.rotation.y = Math.PI + Math.sin(time * 0.3 + phase) * 0.15;
+        // Gentle bob up/down
+        eyeOrb.position.y = baseY + Math.sin(time * 0.7 + phase) * 0.06;
       }
+    }
+
+    // Portal swirl rotation + pulse
+    const portalDisc = this.group.getObjectByName('dragon-portal-disc');
+    if (portalDisc) {
+      portalDisc.rotation.z = time * 0.3;
+      const pMat = (portalDisc as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      pMat.opacity = 0.6 + Math.sin(time * 0.8) * 0.2;
+    }
+    const portalSwirl = this.group.getObjectByName('dragon-portal-swirl');
+    if (portalSwirl) {
+      portalSwirl.rotation.z = -time * 0.6;
+      const sMat = (portalSwirl as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      sMat.opacity = 0.2 + Math.sin(time * 1.2 + 1.0) * 0.15;
+    }
+    const portalLight = this.group.getObjectByName('dragon-portal-light');
+    if (portalLight) {
+      (portalLight as THREE.PointLight).intensity = 3.0 + Math.sin(time * 1.0) * 1.5;
     }
 
     // Mist drifting from the maw
@@ -3201,10 +2232,6 @@ export class HubWorld {
     const innerGlow = this.group.getObjectByName('dragon-inner-glow');
     if (innerGlow) {
       (innerGlow as THREE.PointLight).intensity = 1.5 + Math.sin(time * 0.8) * 0.6;
-    }
-    const dungeonGlow = this.group.getObjectByName('dragon-dungeon-glow');
-    if (dungeonGlow) {
-      (dungeonGlow as THREE.PointLight).intensity = 1.2 + Math.sin(time * 1.5) * 0.4;
     }
 
     // Bone dust particle drift
@@ -3238,83 +2265,6 @@ export class HubWorld {
           strip.rotation.z = Math.sin(time * 0.4 + s * 1.2 + (wSide === 'L' ? 0 : 2)) * 0.08;
           strip.rotation.x = Math.sin(time * 0.3 + s * 0.9) * 0.05;
         }
-      }
-    }
-
-    // ── Tree of Life animations ──────────────────────────────────────
-    // Fireflies - gentle floating movement
-    for (let i = 0; i < 20; i++) {
-      const firefly = this.group.getObjectByName(`tree-firefly-${i}`);
-      if (firefly) {
-        const phase = i * 1.37;
-        firefly.position.x = firefly.userData.baseX + Math.sin(time * 0.7 + phase) * 1.5;
-        firefly.position.y = firefly.userData.baseY + Math.cos(time * 0.5 + phase) * 0.8;
-        firefly.position.z = firefly.userData.baseZ + Math.sin(time * 0.6 + phase * 0.7) * 1.5;
-        const mat = (firefly as THREE.Mesh).material as THREE.MeshBasicMaterial;
-        mat.opacity = 0.3 + Math.sin(time * 2.5 + phase) * 0.4;
-      }
-    }
-
-    // Water pool surface
-    const treePool = this.group.getObjectByName('tree-water-pool');
-    if (treePool) {
-      treePool.position.y = 0.18 + Math.sin(time * 1.5) * 0.015;
-      treePool.rotation.y = time * 0.05;
-    }
-
-    // Waterfall wobble
-    const waterfall = this.group.getObjectByName('tree-waterfall');
-    if (waterfall) {
-      waterfall.scale.x = 1 + Math.sin(time * 4) * 0.15;
-      waterfall.scale.z = 1 + Math.cos(time * 3.5) * 0.1;
-    }
-
-    // Mini streams
-    for (let i = 0; i < 3; i++) {
-      const treeStream = this.group.getObjectByName(`tree-stream-${i}`);
-      if (treeStream) {
-        treeStream.scale.x = 1 + Math.sin(time * 3 + i * 2) * 0.2;
-      }
-    }
-
-    // Ripples at waterfall base - expand and fade
-    for (let i = 0; i < 3; i++) {
-      const ripple = this.group.getObjectByName(`tree-ripple-${i}`);
-      if (ripple) {
-        const cycle = (time * 1.0 + i * 0.7) % 2.0;
-        const s = 1 + cycle * 2.0;
-        ripple.scale.set(s, s, s);
-        const mat = (ripple as THREE.Mesh).material as THREE.MeshBasicMaterial;
-        mat.opacity = 0.3 * Math.max(0, 1 - cycle / 2.0);
-      }
-    }
-
-    // Rune glow pulse
-    for (let i = 0; i < 8; i++) {
-      const rune = this.group.getObjectByName(`tree-rune-${i}`);
-      if (rune) {
-        const mat = (rune as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        mat.emissiveIntensity = 0.4 + Math.sin(time * 2 + i * 0.8) * 0.4;
-      }
-    }
-
-    // Root tip glow pulse
-    for (let i = 0; i < 8; i += 2) {
-      const tip = this.group.getObjectByName(`tree-root-glow-${i}`);
-      if (tip) {
-        const mat = (tip as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        mat.emissiveIntensity = 0.5 + Math.sin(time * 1.8 + i * 0.8) * 0.3;
-        const s = 1 + Math.sin(time * 2 + i) * 0.2;
-        tip.scale.set(s, s, s);
-      }
-    }
-
-    // Leaf clusters gentle sway
-    for (let i = 0; i < 12; i++) {
-      const leaf = this.group.getObjectByName(`tree-leaf-${i}`);
-      if (leaf) {
-        leaf.rotation.z = Math.sin(time * 0.4 + i * 0.5) * 0.03;
-        leaf.rotation.x = Math.cos(time * 0.35 + i * 0.7) * 0.02;
       }
     }
 

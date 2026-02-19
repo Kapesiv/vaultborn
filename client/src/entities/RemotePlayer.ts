@@ -31,7 +31,7 @@ export class RemotePlayer {
       const { scene: model, animations } = await characterLoader.getClone('/models/player.glb');
 
       try {
-        const walkClips = await characterLoader.loadAnimationClips('/models/walk.glb');
+        const walkClips = await characterLoader.loadAnimationClips('/models/walking.fbx');
         for (const clip of walkClips) {
           clip.name = 'walk';
           this.stripRootDrift(clip);

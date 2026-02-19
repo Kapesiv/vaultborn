@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from './QualityProfile.js';
 
 export class CameraController {
   public camera: THREE.PerspectiveCamera;
@@ -23,7 +24,7 @@ export class CameraController {
   private smoothSpeed = 8;
 
   constructor() {
-    this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
+    this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, quality.farPlane);
     this.camera.position.set(0, 4, 8);
     window.addEventListener('resize', () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;

@@ -13,3 +13,7 @@ Thumbs.db
 *.fbx
 _test_*
 test_*
+
+# Large model files (>100MB, GitHub limit)
+client/public/models/elder_mika.glb
+client/public/models/knight_artorias.glb

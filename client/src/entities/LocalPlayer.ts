@@ -3,17 +3,18 @@ import { computeMovement, type PlayerInput } from '@saab/shared';
 import { CharacterController } from './CharacterController.js';
 import { characterLoader } from './CharacterLoader.js';
 import type { WorldCollider } from '../world/HubWorld.js';
+import { downscaleTextures } from '../utils/downscaleTextures.js';
 
 export type Gender = 'male' | 'female';
 
 export class LocalPlayer {
   public mesh: THREE.Group;
-  public position = new THREE.Vector3(0, 0.91, 16);
+  public position = new THREE.Vector3(0, 0, 26);
   public rotation = 0;
   public gender: Gender;
 
   // Visual smoothing — mesh lerps toward logic position
-  private visualPos = new THREE.Vector3(0, 0.91, 16);
+  private visualPos = new THREE.Vector3(0, 0, 26);
   private visualRot = 0;
   private targetRotation = 0;
 
@@ -71,9 +72,9 @@ export class LocalPlayer {
       const { scene: model, animations } = await characterLoader.getClone('/models/player.glb');
       console.log(`[LocalPlayer] Loaded OK, ${animations.length} anims`);
 
-      // Load walk animation from separate file
+      // Load walk animation from separate FBX file
       try {
-        const walkClips = await characterLoader.loadAnimationClips('/models/walk.glb');
+        const walkClips = await characterLoader.loadAnimationClips('/models/walking.fbx');
         for (const clip of walkClips) {
           clip.name = 'walk';
           this.stripRootDrift(clip);
@@ -81,6 +82,36 @@ export class LocalPlayer {
         }
         console.log(`[LocalPlayer] Walk animation loaded (${walkClips.length} clips, root drift stripped)`);
       } catch { /* walk anim optional */ }
+
+      // Load run animation from separate FBX file
+      try {
+        const runClips = await characterLoader.loadAnimationClips('/models/run.fbx');
+        for (const clip of runClips) {
+          clip.name = 'run';
+          animations.push(clip);
+        }
+        console.log(`[LocalPlayer] Run animation loaded (${runClips.length} clips)`);
+      } catch { /* run anim optional */ }
+
+      // Load attack animation from separate FBX file
+      try {
+        const attackClips = await characterLoader.loadAnimationClips('/models/attack.fbx');
+        for (const clip of attackClips) {
+          clip.name = 'attack';
+          animations.push(clip);
+        }
+        console.log(`[LocalPlayer] Attack animation loaded (${attackClips.length} clips)`);
+      } catch { /* attack anim optional */ }
+
+      // Load crouch animation from separate FBX file
+      try {
+        const crouchClips = await characterLoader.loadAnimationClips('/models/crouch.fbx');
+        for (const clip of crouchClips) {
+          clip.name = 'crouch';
+          animations.push(clip);
+        }
+        console.log(`[LocalPlayer] Crouch animation loaded (${crouchClips.length} clips)`);
+      } catch { /* crouch anim optional */ }
 
       this.controller.attachModel(model, animations);
       this.equipWeapon(this.weaponType);
@@ -140,40 +171,109 @@ export class LocalPlayer {
   private createNameplate(name: string, level: number, title?: string): THREE.Sprite {
     const canvas = document.createElement('canvas');
     canvas.width = 512;
-    canvas.height = 128;
+    canvas.height = 160;
     const ctx = canvas.getContext('2d')!;
 
-    ctx.font = 'bold 32px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 4;
-    const mainText = `Lv.${level}  ${name}`;
-    ctx.strokeText(mainText, 256, 45);
-    ctx.fillText(mainText, 256, 45);
+    const cx = 256;
 
+    // ── Background banner ──
+    const bannerY = 8;
+    const bannerH = title ? 100 : 70;
+    const bannerW = 360;
+    const bannerX = cx - bannerW / 2;
+
+    // Dark gradient backdrop
+    const grad = ctx.createLinearGradient(bannerX, bannerY, bannerX, bannerY + bannerH);
+    grad.addColorStop(0, 'rgba(10,10,20,0.75)');
+    grad.addColorStop(1, 'rgba(10,10,20,0.45)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 12);
+    ctx.fill();
+
+    // Gold border
+    ctx.strokeStyle = 'rgba(255,200,60,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 12);
+    ctx.stroke();
+
+    // ── Level badge (left) ──
+    const badgeX = bannerX + 38;
+    const badgeY = bannerY + 30;
+    const badgeR = 18;
+
+    // Badge circle
+    const badgeGrad = ctx.createRadialGradient(badgeX, badgeY, 0, badgeX, badgeY, badgeR);
+    badgeGrad.addColorStop(0, '#ffd700');
+    badgeGrad.addColorStop(1, '#b8860b');
+    ctx.fillStyle = badgeGrad;
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffe680';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Level number
+    ctx.font = 'bold 22px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#1a1000';
+    ctx.fillText(`${level}`, badgeX, badgeY + 1);
+
+    // ── Name ──
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = 'bold 30px Arial';
+    ctx.textAlign = 'center';
+    const nameX = cx + 12;
+
+    // Glow
+    ctx.shadowColor = 'rgba(255,200,60,0.5)';
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(name, nameX, bannerY + 36);
+    ctx.shadowBlur = 0;
+
+    // Outline
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(name, nameX, bannerY + 36);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(name, nameX, bannerY + 36);
+
+    // ── Title (if any) ──
     if (title) {
-      ctx.font = 'italic 22px Arial';
+      ctx.font = 'italic 20px Arial';
       ctx.fillStyle = '#ffd700';
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 3;
-      ctx.strokeText(title, 256, 80);
-      ctx.fillText(title, 256, 80);
+      ctx.shadowColor = 'rgba(255,200,60,0.3)';
+      ctx.shadowBlur = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.lineWidth = 2;
+      ctx.strokeText(title, nameX, bannerY + 62);
+      ctx.fillText(title, nameX, bannerY + 62);
+      ctx.shadowBlur = 0;
     }
 
-    ctx.fillStyle = '#333333';
-    ctx.fillRect(156, 92, 200, 12);
-    ctx.fillStyle = '#44cc44';
-    ctx.fillRect(156, 92, 200, 12);
-    ctx.strokeStyle = '#111111';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(156, 92, 200, 12);
+    // ── Decorative line under name ──
+    const lineY = title ? bannerY + 74 : bannerY + 50;
+    const lineGrad = ctx.createLinearGradient(bannerX + 40, lineY, bannerX + bannerW - 40, lineY);
+    lineGrad.addColorStop(0, 'rgba(255,200,60,0)');
+    lineGrad.addColorStop(0.3, 'rgba(255,200,60,0.5)');
+    lineGrad.addColorStop(0.7, 'rgba(255,200,60,0.5)');
+    lineGrad.addColorStop(1, 'rgba(255,200,60,0)');
+    ctx.strokeStyle = lineGrad;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bannerX + 40, lineY);
+    ctx.lineTo(bannerX + bannerW - 40, lineY);
+    ctx.stroke();
 
     const texture = new THREE.CanvasTexture(canvas);
     const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
     const sprite = new THREE.Sprite(mat);
-    sprite.position.y = 2.2;
-    sprite.scale.set(3, 0.75, 1);
+    sprite.position.y = 3.8;
+    sprite.scale.set(3.5, 1.1, 1);
     sprite.name = 'nameplate';
     return sprite;
   }
@@ -189,12 +289,44 @@ export class LocalPlayer {
   // ════════════════════════════════════════════════════════════════
   // WEAPONS — swappable weapon meshes
   // ════════════════════════════════════════════════════════════════
-  private createWeaponByType(type: string): THREE.Group {
-    switch (type) {
-      case 'iron-sword': return this.createSwordMesh();
-      case 'battle-axe': return this.createAxeMesh();
-      case 'magic-staff': return this.createStaffMesh();
-      default: return this.createBoneClubMesh();
+  private createWeaponByType(_type: string): THREE.Group {
+    // Placeholder group — GLB will be loaded async
+    const g = new THREE.Group();
+    this.loadWeaponGLB(g);
+    return g;
+  }
+
+  private async loadWeaponGLB(weaponGroup: THREE.Group) {
+    try {
+      const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+      const loader = new GLTFLoader();
+      loader.load('/models/viking_axe.glb', (gltf) => {
+        const model = gltf.scene;
+        downscaleTextures(model);
+        // Scale to 1.3 max dimension in bone-local space (same size as before)
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale = 1.3 / Math.max(maxDim, 0.01);
+        model.scale.setScalar(scale);
+        // Position grip (bottom of handle) at bone origin instead of centering
+        // This way the hand wraps around the grip naturally
+        const center = box.getCenter(new THREE.Vector3());
+        model.position.set(
+          -center.x * scale,       // center X (side-to-side)
+          -box.min.y * scale,      // grip (bottom of handle) at Y=0
+          -center.z * scale,       // center Z (front-to-back)
+        );
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+          }
+        });
+        weaponGroup.add(model);
+        console.log(`[LocalPlayer] Viking axe loaded, scale: ${scale.toFixed(3)}, size:`, size.toArray().map(v => v.toFixed(2)));
+      });
+    } catch (err) {
+      console.error('[LocalPlayer] Failed to load weapon GLB:', err);
     }
   }
 
@@ -422,11 +554,11 @@ export class LocalPlayer {
 
     if (this.controller.isModelLoaded) {
       newWeapon.scale.setScalar(1.0);
-      newWeapon.position.set(0, 0.05, 0);
-      newWeapon.rotation.set(0, 0, 0);
+      newWeapon.position.set(0, -0.1, 0);
+      newWeapon.rotation.set(-Math.PI / 2, Math.PI / 3, Math.PI / 6);
       this.controller.attachWeapon(newWeapon);
     } else {
-      newWeapon.position.set(0.5, 0.5, 0);
+      newWeapon.position.set(-0.5, 0.5, 0);
       this.mesh.add(newWeapon);
     }
 
@@ -878,9 +1010,11 @@ export class LocalPlayer {
     this.pendingInputs.push(input);
 
     if (input.attack) {
-      this.attackAnimation = 0.4;
+      const clipDur = this.controller.getClipDuration('attack');
+      this.attackAnimation = clipDur > 0 ? clipDur : 0.8;
       this.controller.transitionTo('attack');
       this.controller.onAnimationFinished(() => {
+        this.attackAnimation = 0;
         this.controller.transitionTo('idle');
       });
     }
@@ -900,42 +1034,13 @@ export class LocalPlayer {
 
   private static readonly FNT_R = 3.6;
 
-  private static readonly SHOP_X1 = -16.3;
-  private static readonly SHOP_X2 = -7.7;
-  private static readonly SHOP_Z1 = -8.3;
-  private static readonly SHOP_Z2 = -1.7;
+  private static readonly SHOP_X1 = -31.3;
+  private static readonly SHOP_X2 = -22.7;
+  private static readonly SHOP_Z1 = -16.3;
+  private static readonly SHOP_Z2 = -7.7;
 
   private getFloorHeight(): number {
-    const { AX, AZ, T_TOP_R, T_MID_R, T_BOT_R, T_TOP_H, T_MID_H, T_BOT_H, RAMP, RHW } = LocalPlayer;
-    const dx = this.position.x - AX;
-    const dz = this.position.z - AZ;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-
-    if (dist <= T_TOP_R) return T_TOP_H;
-    if (dist <= T_MID_R) return T_MID_H;
-    if (dist <= T_BOT_R) return T_BOT_H;
-
-    let best = 0;
-    const botEdge = T_BOT_R;
-
-    const nE = AZ - botEdge;
-    if (Math.abs(dx) < RHW && this.position.z <= nE && this.position.z >= nE - RAMP) {
-      best = Math.max(best, ((this.position.z - (nE - RAMP)) / RAMP) * T_BOT_H);
-    }
-    const sE = AZ + botEdge;
-    if (Math.abs(dx) < RHW && this.position.z >= sE && this.position.z <= sE + RAMP) {
-      best = Math.max(best, ((sE + RAMP - this.position.z) / RAMP) * T_BOT_H);
-    }
-    const eE = AX + botEdge;
-    if (Math.abs(dz) < RHW && this.position.x >= eE && this.position.x <= eE + RAMP) {
-      best = Math.max(best, ((eE + RAMP - this.position.x) / RAMP) * T_BOT_H);
-    }
-    const wE = AX - botEdge;
-    if (Math.abs(dz) < RHW && this.position.x <= wE && this.position.x >= wE - RAMP) {
-      best = Math.max(best, ((this.position.x - (wE - RAMP)) / RAMP) * T_BOT_H);
-    }
-
-    return best;
+    return 0;
   }
 
   private altarWall() {
@@ -1028,12 +1133,17 @@ export class LocalPlayer {
     }
   }
 
-  update(dt: number, time: number, isMoving: boolean) {
-    // Position updates every frame now (via applyFrameMovement), copy directly
-    this.mesh.position.copy(this.position);
+  update(dt: number, time: number, isMoving: boolean, cameraYaw?: number, isSprinting = false, isCrouching = false) {
+    // ── Smooth visual interpolation ────────────────────────────────
+    const posLerp = Math.min(1, dt * 20);
+    this.visualPos.x += (this.position.x - this.visualPos.x) * posLerp;
+    this.visualPos.y += (this.position.y - this.visualPos.y) * posLerp;
+    this.visualPos.z += (this.position.z - this.visualPos.z) * posLerp;
+    this.mesh.position.copy(this.visualPos);
 
-    // Smooth rotation with shortest-path angle wrapping
-    let angleDiff = this.targetRotation - this.visualRot;
+    // Face camera direction so weapon points where you're looking
+    const aimTarget = cameraYaw != null ? cameraYaw : this.targetRotation;
+    let angleDiff = aimTarget - this.visualRot;
     while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
     while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
     this.visualRot += angleDiff * Math.min(1, dt * 14);
@@ -1043,6 +1153,10 @@ export class LocalPlayer {
     // ── Animation state transitions via CharacterController ──────
     if (this.attackAnimation > 0) {
       this.attackAnimation -= dt;
+    } else if (isCrouching) {
+      this.controller.transitionTo('crouch');
+    } else if (isMoving && isSprinting) {
+      this.controller.transitionTo('run');
     } else if (isMoving) {
       this.controller.transitionTo('walk');
     } else {

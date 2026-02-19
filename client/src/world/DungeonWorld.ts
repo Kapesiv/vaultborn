@@ -188,8 +188,8 @@ export class DungeonWorld {
     this.moonLight = new THREE.DirectionalLight(0x4466aa, 0.5);
     this.moonLight.position.set(5, 30, -10);
     this.moonLight.castShadow = true;
-    this.moonLight.shadow.mapSize.width = 2048;
-    this.moonLight.shadow.mapSize.height = 2048;
+    this.moonLight.shadow.mapSize.width = 1024;
+    this.moonLight.shadow.mapSize.height = 1024;
     this.moonLight.shadow.camera.near = 1;
     this.moonLight.shadow.camera.far = 80;
     this.moonLight.shadow.camera.left = -30;

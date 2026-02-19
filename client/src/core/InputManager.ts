@@ -32,6 +32,8 @@ export class InputManager {
       if (e.code === 'Digit3') this.skillQueued = 2;
       if (e.code === 'Digit4') this.skillQueued = 3;
       if (e.code === 'Digit5' || e.code === 'KeyH') this.potionQueued = true;
+      // Prevent Ctrl browser shortcuts while in game
+      if (e.code === 'ControlLeft' || e.code === 'ControlRight') e.preventDefault();
     });
 
     window.addEventListener('keyup', (e) => {
@@ -86,6 +88,14 @@ export class InputManager {
     return j;
   }
 
+  isSprinting(): boolean {
+    return this.isMoving() && (this.keys.get('ShiftLeft') === true || this.keys.get('ShiftRight') === true);
+  }
+
+  isCrouching(): boolean {
+    return this.keys.get('ControlLeft') === true || this.keys.get('ControlRight') === true;
+  }
+
   consumeMouse(): { dx: number; dy: number } {
     const result = { dx: this.mouseDx, dy: this.mouseDy };
     this.mouseDx = 0;
@@ -103,6 +113,7 @@ export class InputManager {
       left: this.isKey('KeyA') || (touchInput?.left ?? false),
       right: this.isKey('KeyD') || (touchInput?.right ?? false),
       jump: this.jumpForNetwork,
+      sprint: this.isSprinting(),
       rotation,
       dt,
     };

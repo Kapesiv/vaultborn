@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { downscaleTextures } from '../utils/downscaleTextures';
 
 interface CachedModel {
   scene: THREE.Group;
@@ -180,6 +181,7 @@ class CharacterLoaderSingleton {
               child.receiveShadow = true;
             }
           });
+          downscaleTextures(gltf.scene);
 
           const cached: CachedModel = {
             scene: gltf.scene,

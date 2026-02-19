@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type AnimationState = 'idle' | 'walk' | 'attack';
+export type AnimationState = 'idle' | 'walk' | 'run' | 'crouch' | 'attack';
 
 const CROSSFADE_DURATION = 0.2;
 
@@ -43,19 +43,23 @@ export class CharacterController {
 
     this.model = scene;
 
-    // Auto-scale FBX models (Mixamo uses cm, we use meters)
+    // Scale model to match NPC height (~2.5m)
     const box = new THREE.Box3().setFromObject(scene);
     const height = box.max.y - box.min.y;
-    console.log(`[CharacterController] Raw model height: ${height.toFixed(2)}, box:`, box.min.toArray().map(v => v.toFixed(1)), box.max.toArray().map(v => v.toFixed(1)));
-    if (height > 10) {
-      // Model is in centimeters — scale to ~1.8m
-      const scale = 1.8 / height;
-      scene.scale.setScalar(scale);
-      console.log(`[CharacterController] Scaled to ${scale.toFixed(4)} (cm -> m)`);
-    }
+    const TARGET_HEIGHT = 3.0;
+    const scale = TARGET_HEIGHT / Math.max(height, 0.01);
+    scene.scale.setScalar(scale);
+    console.log(`[CharacterController] Raw height: ${height.toFixed(2)}, scaled to ${TARGET_HEIGHT}m (×${scale.toFixed(4)})`);
 
     // Rotate model to face -Z (forward / W direction)
     scene.rotation.y = Math.PI;
+
+    // Ground the model — shift so feet sit at local Y=0
+    scene.updateMatrixWorld(true);
+    const groundBox = new THREE.Box3().setFromObject(scene);
+    if (groundBox.min.y !== 0) {
+      scene.position.y -= groundBox.min.y;
+    }
 
     // Log meshes for debugging
     let meshCount = 0;
@@ -76,25 +80,74 @@ export class CharacterController {
 
     // Map animations by name (case-insensitive lookup)
     for (const clip of animations) {
-      const action = this.mixer.clipAction(clip);
-      // Normalize common Mixamo names
+      // Strip root motion (position tracks on Hips) so the game's
+      // movement system controls position, not the animation
       const name = this.normalizeAnimName(clip.name);
+      if (name === 'walk' || name === 'run' || name === 'attack') {
+        this.stripRootMotion(clip);
+      } else if (name === 'crouch') {
+        this.stripRootMotionKeepY(clip);
+      }
+      const action = this.mixer.clipAction(clip);
       this.actions.set(name, action);
-      console.log(`[CharacterController] Mapped animation: "${clip.name}" -> "${name}"`);
+      console.log(`[CharacterController] Mapped animation: "${clip.name}" -> "${name}" (${clip.tracks.length} tracks)`);
+    }
+
+    // Create procedural idle animation if none was loaded
+    if (!this.getAction('idle')) {
+      const idleClip = this.createProceduralIdle();
+      if (idleClip) {
+        const action = this.mixer.clipAction(idleClip);
+        this.actions.set('idle', action);
+        console.log('[CharacterController] Created procedural idle animation');
+      }
+    }
+
+    // Use loaded walk animation if available, otherwise fall back to procedural
+    if (!this.getAction('walk')) {
+      const walkClip = this.createProceduralWalk();
+      if (walkClip) {
+        const walkAction = this.mixer.clipAction(walkClip);
+        this.actions.set('walk', walkAction);
+        console.log('[CharacterController] Created procedural walk animation (fallback)');
+      }
+    } else {
+      console.log('[CharacterController] Using loaded walk animation');
+    }
+
+    // Fallback: if no run animation loaded, use walk at 1.5x speed
+    if (!this.getAction('run')) {
+      const walkAction = this.getAction('walk');
+      if (walkAction) {
+        const runClip = walkAction.getClip().clone();
+        runClip.name = 'run';
+        const runAction = this.mixer.clipAction(runClip);
+        runAction.timeScale = 1.5;
+        this.actions.set('run', runAction);
+        console.log('[CharacterController] Run fallback: using walk at 1.5x speed');
+      }
+    } else {
+      console.log('[CharacterController] Using loaded run animation');
+    }
+
+    // Use procedural axe swing only if no attack animation was loaded from FBX
+    if (!this.getAction('attack')) {
+      const attackClip = this.createProceduralAxeSwing();
+      if (attackClip) {
+        const attackAction = this.mixer.clipAction(attackClip);
+        this.actions.set('attack', attackAction);
+        console.log('[CharacterController] Created procedural axe-swing attack (fallback)');
+      }
+    } else {
+      console.log('[CharacterController] Using loaded attack animation from FBX');
     }
 
     // Start idle animation immediately to avoid T-pose
     const idleAction = this.getAction('idle');
     if (idleAction) {
+      idleAction.setLoop(THREE.LoopRepeat, Infinity);
       idleAction.play();
       console.log('[CharacterController] Playing idle animation');
-    } else {
-      // If no idle, play the first available animation
-      const firstAction = this.actions.values().next().value;
-      if (firstAction) {
-        firstAction.play();
-        console.log('[CharacterController] No idle found, playing first available animation');
-      }
     }
 
     // Cache key bones
@@ -112,28 +165,28 @@ export class CharacterController {
     const rightArm = this.getBone('mixamorigRightArm');
 
     if (leftArm) {
-      leftArm.rotation.z = 1.5;
-      leftArm.rotation.x = 0.05;
+      leftArm.rotation.set(1.0, 0, 0.3);
     }
     if (rightArm) {
-      rightArm.rotation.z = -1.5;
-      rightArm.rotation.x = 0.05;
+      rightArm.rotation.set(1.0, 0, -0.3);
     }
 
     const leftForeArm = this.getBone('mixamorigLeftForeArm');
     const rightForeArm = this.getBone('mixamorigRightForeArm');
 
     if (leftForeArm) {
-      leftForeArm.rotation.z = 0.05;
+      leftForeArm.rotation.set(0, 0, 0);
     }
     if (rightForeArm) {
-      rightForeArm.rotation.z = -0.05;
+      rightForeArm.rotation.set(0, 0, 0);
     }
   }
 
   /** Transition smoothly to a new animation state. */
   transitionTo(state: AnimationState, crossfade = CROSSFADE_DURATION): void {
-    if (!this.modelLoaded || state === this.currentState) return;
+    if (!this.modelLoaded) return;
+    // Allow re-triggering attack from attack state (restart the animation)
+    if (state === this.currentState && state !== 'attack') return;
 
     const currentAction = this.getAction(this.currentState);
     const nextAction = this.getAction(state);
@@ -146,13 +199,22 @@ export class CharacterController {
       } else {
         nextAction.setLoop(THREE.LoopRepeat, Infinity);
       }
-      if (currentAction) {
+      if (currentAction && currentAction !== nextAction) {
         currentAction.crossFadeTo(nextAction, crossfade, true);
       }
       nextAction.play();
+    } else if (currentAction) {
+      // No target animation — fade out current so character stops
+      currentAction.fadeOut(crossfade);
     }
 
     this.currentState = state;
+  }
+
+  /** Get the duration of an animation clip by state name. */
+  getClipDuration(state: AnimationState): number {
+    const action = this.getAction(state);
+    return action ? action.getClip().duration : 0;
   }
 
   /** Update the animation mixer. */
@@ -166,8 +228,8 @@ export class CharacterController {
     if (this.model) {
       this.model.position.set(0, 0, 0);
     }
-    // If no idle animation, maintain rest pose when idle
-    if (this.currentState === 'idle' && !this.getAction('idle')) {
+    // Apply rest pose for arms when idle (walk animation handles its own arms)
+    if (this.currentState === 'idle') {
       this.setRestPose();
     }
   }
@@ -229,13 +291,228 @@ export class CharacterController {
     return this.actions.get(state);
   }
 
+  /**
+   * Create a subtle procedural idle (breathing) animation from skeleton bones.
+   */
+  private createProceduralIdle(): THREE.AnimationClip | null {
+    const hipsBone = this.getBone('mixamorigHips');
+    const spineBone = this.getBone('mixamorigSpine');
+    if (!hipsBone && !spineBone) return null;
+
+    const duration = 3;
+    const times = [0, 1.5, 3];
+    const tracks: THREE.KeyframeTrack[] = [];
+
+    if (hipsBone) {
+      const y = hipsBone.position.y;
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${hipsBone.name}.position[y]`,
+        times,
+        [y, y + 0.02, y],
+      ));
+    }
+
+    if (spineBone) {
+      const rx = spineBone.rotation.x;
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${spineBone.name}.rotation[x]`,
+        times,
+        [rx, rx + 0.012, rx],
+      ));
+    }
+
+    const clip = new THREE.AnimationClip('idle', duration, tracks);
+    for (const track of clip.tracks) {
+      track.setInterpolation(THREE.InterpolateSmooth);
+    }
+    return clip;
+  }
+
+  /** Create a procedural walk cycle using leg and arm bones. */
+  private createProceduralWalk(): THREE.AnimationClip | null {
+    const leftUpLeg = this.getBone('mixamorigLeftUpLeg');
+    const rightUpLeg = this.getBone('mixamorigRightUpLeg');
+    const leftLeg = this.getBone('mixamorigLeftLeg');
+    const rightLeg = this.getBone('mixamorigRightLeg');
+    const hipsBone = this.getBone('mixamorigHips');
+
+    if (!leftUpLeg && !rightUpLeg) return null;
+
+    const duration = 0.8; // one full step cycle
+    const times = [0, 0.2, 0.4, 0.6, 0.8];
+    const tracks: THREE.KeyframeTrack[] = [];
+
+    // Legs swing forward/backward (X rotation)
+    const legSwing = 0.4;
+    if (leftUpLeg) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${leftUpLeg.name}.rotation[x]`,
+        times,
+        [0, -legSwing, 0, legSwing, 0],
+      ));
+    }
+    if (rightUpLeg) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${rightUpLeg.name}.rotation[x]`,
+        times,
+        [0, legSwing, 0, -legSwing, 0],
+      ));
+    }
+
+    // Knees bend on back-swing
+    const kneeBend = 0.4;
+    if (leftLeg) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${leftLeg.name}.rotation[x]`,
+        times,
+        [0, 0, 0, kneeBend, 0],
+      ));
+    }
+    if (rightLeg) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${rightLeg.name}.rotation[x]`,
+        times,
+        [0, kneeBend, 0, 0, 0],
+      ));
+    }
+
+    // Subtle hip bounce
+    if (hipsBone) {
+      const y = hipsBone.position.y;
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${hipsBone.name}.position[y]`,
+        times,
+        [y, y + 0.015, y, y + 0.015, y],
+      ));
+    }
+
+    const clip = new THREE.AnimationClip('walk', duration, tracks);
+    for (const track of clip.tracks) {
+      track.setInterpolation(THREE.InterpolateSmooth);
+    }
+    return clip;
+  }
+
+  /**
+   * Remove position tracks from Hips bone to prevent root motion.
+   * Keeps rotation tracks so the walk pose looks correct.
+   */
+  private stripRootMotion(clip: THREE.AnimationClip): void {
+    const before = clip.tracks.length;
+    clip.tracks = clip.tracks.filter((track) => {
+      // Remove position/scale tracks on Hips/root bone (they cause the model to fly away)
+      const isHips = /hips/i.test(track.name);
+      if (isHips && (track.name.includes('.position') || track.name.includes('.scale'))) {
+        console.log(`[CharacterController] Stripped root motion track: ${track.name}`);
+        return false;
+      }
+      return true;
+    });
+    console.log(`[CharacterController] stripRootMotion: ${before} -> ${clip.tracks.length} tracks`);
+  }
+
+  /**
+   * Strip horizontal root motion (X/Z) but keep vertical (Y) so crouch lowers the character.
+   */
+  private stripRootMotionKeepY(clip: THREE.AnimationClip): void {
+    clip.tracks = clip.tracks.filter((track) => {
+      const isHips = /hips/i.test(track.name);
+      // Remove scale tracks entirely
+      if (isHips && track.name.includes('.scale')) {
+        console.log(`[CharacterController] Stripped crouch scale track: ${track.name}`);
+        return false;
+      }
+      // For position tracks, zero out X and Z but keep Y
+      if (isHips && track.name.includes('.position')) {
+        const values = track.values;
+        // VectorKeyframeTrack: values = [x0,y0,z0, x1,y1,z1, ...]
+        for (let i = 0; i < values.length; i += 3) {
+          values[i] = 0;       // zero X
+          values[i + 2] = 0;   // zero Z
+        }
+        console.log(`[CharacterController] Zeroed X/Z on crouch position track: ${track.name} (kept Y)`);
+      }
+      return true;
+    });
+  }
+
   /** Normalize Mixamo clip names to our state names. */
   private normalizeAnimName(name: string): string {
     const lower = name.toLowerCase();
     if (lower.includes('idle') || lower.includes('breathing')) return 'idle';
-    if (lower.includes('walk') || lower.includes('run') || lower.includes('jog')) return 'walk';
+    if (lower === 'run' || lower.includes('dribble') || lower.includes('sprint')) return 'run';
+    if (lower.includes('walk') || lower.includes('jog')) return 'walk';
+    if (lower.includes('crouch')) return 'crouch';
     if (lower.includes('attack') || lower.includes('slash') || lower.includes('swing') || lower.includes('stab')) return 'attack';
     // Return original for unmapped clips
     return name;
+  }
+
+  /**
+   * Procedural right-hand overhead axe chop.
+   * Winds up by raising the right arm, then swings down hard.
+   */
+  private createProceduralAxeSwing(): THREE.AnimationClip | null {
+    const rightArm = this.getBone('mixamorigRightArm');
+    const rightForeArm = this.getBone('mixamorigRightForeArm');
+    const spine = this.getBone('mixamorigSpine');
+    const spine1 = this.getBone('mixamorigSpine1');
+    if (!rightArm) return null;
+
+    const duration = 0.7;
+    // Keyframes: rest → windup → swing → impact → recover
+    //            0      0.15      0.35     0.45     0.7
+    const times = [0, 0.15, 0.35, 0.45, 0.7];
+    const tracks: THREE.KeyframeTrack[] = [];
+
+    // Right upper arm — X rotation (swing arc), Z rotation (arm lift)
+    // Rest pose: x=1.0, z=-0.3 (arm hanging at side, mirrored from left)
+    // Windup: raise arm up and back over shoulder
+    // Swing: chop downward hard
+    tracks.push(new THREE.NumberKeyframeTrack(
+      `${rightArm.name}.rotation[x]`,
+      times,
+      [1.0, -1.2, 2.2, 2.4, 1.0],
+    ));
+    tracks.push(new THREE.NumberKeyframeTrack(
+      `${rightArm.name}.rotation[z]`,
+      times,
+      [-0.3, 0.8, -0.1, -0.2, -0.3], // mirrored Z from left-hand version
+    ));
+
+    // Right forearm — bend elbow during windup, extend on swing
+    if (rightForeArm) {
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${rightForeArm.name}.rotation[x]`,
+        times,
+        [0, -0.8, -0.2, 0, 0],
+      ));
+    }
+
+    // Spine — lean into the swing
+    if (spine) {
+      const rx = spine.rotation.x;
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${spine.name}.rotation[x]`,
+        times,
+        [rx, rx - 0.1, rx + 0.2, rx + 0.25, rx],
+      ));
+    }
+
+    // Spine1 — torso twist (mirrored direction)
+    if (spine1) {
+      const ry = spine1.rotation.y;
+      tracks.push(new THREE.NumberKeyframeTrack(
+        `${spine1.name}.rotation[y]`,
+        times,
+        [ry, ry - 0.2, ry + 0.3, ry + 0.25, ry], // mirrored twist
+      ));
+    }
+
+    const clip = new THREE.AnimationClip('attack', duration, tracks);
+    for (const track of clip.tracks) {
+      track.setInterpolation(THREE.InterpolateSmooth);
+    }
+    return clip;
   }
 }

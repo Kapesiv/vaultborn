@@ -28,6 +28,7 @@ export interface PlayerInput {
   jump: boolean;
   rotation: number; // y-axis rotation
   dt: number;
+  sprint?: boolean;
   attack?: string; // skill id or 'basic'
 }
 

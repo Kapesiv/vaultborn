@@ -177,7 +177,7 @@ export class Game {
     this.network.onMessage = (type, data) => this.handleMessage(type, data);
 
     // Pre-load character model
-    characterLoader.preload(['/models/player.glb', '/models/walk.glb']);
+    characterLoader.preload(['/models/player.glb', '/models/walk.glb', '/models/viking_axe.glb']);
 
     // Build hub world
     this.floatingDamage = new FloatingDamageSystem(this.sceneManager.scene);
@@ -188,7 +188,6 @@ export class Game {
     this.localPlayer.setWorldColliders(this.hubWorld.colliders);
     this.setupRoomListeners(room);
     this.currentRoom = 'hub';
-    this.music.playHub();
 
     // Apply saved audio settings now that the AudioContext exists
     const audioSettings = getSavedSettings();
@@ -336,9 +335,7 @@ export class Game {
       hideFloorClearedPanel();
     }
 
-    // Switch music
-    if (roomType === 'hub') this.music.playHub();
-    else this.music.playDungeon();
+    // Music disabled
   }
 
   private handleMessage(type: string, data: any) {
@@ -500,7 +497,8 @@ export class Game {
     this.camera.onMouseMove(mouse.dx, mouse.dy);
 
     // Check movement state every frame (for smooth animations)
-    this.isMoving = this.input.isMoving();
+    const freeLook = this.camera.isFreeLook();
+    this.isMoving = freeLook ? false : this.input.isMoving();
 
     // Apply movement every render frame for smooth motion
     if (this.localPlayer) {
@@ -515,7 +513,7 @@ export class Game {
 
     // Send network input at fixed rate (20Hz) for server reconciliation
     this.inputTimer += dt;
-    if (this.inputTimer >= this.inputInterval && this.localPlayer) {
+    if (!freeLook && this.inputTimer >= this.inputInterval && this.localPlayer) {
       this.inputTimer = 0;
       const input = this.input.getInput(this.camera.getYaw(), this.inputInterval);
       this.localPlayer.trackNetworkInput(input);
@@ -553,7 +551,9 @@ export class Game {
     }
 
     // Update entities
-    this.localPlayer?.update(dt, this.elapsedTime, this.isMoving);
+    const sprinting = freeLook ? false : this.input.isSprinting();
+    const crouching = this.input.isCrouching();
+    this.localPlayer?.update(dt, this.elapsedTime, this.isMoving, freeLook ? undefined : this.camera.getYaw(), sprinting, crouching);
     this.remotePlayers.forEach(p => p.update(dt, this.elapsedTime));
     this.monsters.forEach(m => m.update(dt));
     this.lootDrops.forEach(l => l.update(dt));
@@ -600,7 +600,7 @@ export class Game {
         for (const npc of this.hubWorld.npcPositions) {
           const dist = pos.distanceTo(npc.position);
           if (dist < 3) {
-            if (npc.name === 'Blacksmith Toivo') {
+            if (npc.name === 'Gernal') {
               showShopPanel();
             } else {
               showNPCDialog(npc.name, npc.dialog);

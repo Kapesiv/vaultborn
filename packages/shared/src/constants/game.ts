@@ -8,7 +8,8 @@ export const HUB_MAX_PLAYERS = 50;
 export const DUNGEON_MAX_PLAYERS = 4;
 
 // Movement
-export const PLAYER_SPEED = 5; // units/sec
+export const PLAYER_SPEED = 3.5; // units/sec
+export const PLAYER_SPRINT_SPEED = 6.5; // units/sec
 export const PLAYER_JUMP_FORCE = 8;
 export const GRAVITY = -20;
 
