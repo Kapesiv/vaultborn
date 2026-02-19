@@ -406,125 +406,146 @@ export class HubWorld {
   }
 
   /**
-   * Build a curved cobblestone path from a set of 2D waypoints.
-   * Uses CatmullRomCurve3 and the same cobblestone vertex-color logic as straight paths.
+   * Build a curved cobblestone path through a set of waypoints.
+   * Creates a single mesh with vertex colors matching the straight-path style.
    */
   private buildCurvedPath(
     waypoints: number[][],
-    pathWidth: number,
+    width: number,
     hashStone: (a: number, b: number) => number,
-    smoothstep: (edge0: number, edge1: number, x: number) => number,
+    smoothstepJS: (edge0: number, edge1: number, x: number) => number,
   ) {
-    const curve = new THREE.CatmullRomCurve3(
-      waypoints.map(([x, z]) => new THREE.Vector3(x, 0, z)),
-      false, 'catmullrom', 0.5,
-    );
+    if (waypoints.length < 2) return;
 
-    const segsAlong = 50;
-    const segsAcross = Math.max(12, Math.floor(pathWidth * 8));
-    const totalLen = curve.getLength();
-    const vtxCount = (segsAlong + 1) * (segsAcross + 1);
-    const posArr = new Float32Array(vtxCount * 3);
-    const colArr = new Float32Array(vtxCount * 3);
+    // Compute cumulative arc length along the polyline
+    const arcLengths = [0];
+    for (let i = 1; i < waypoints.length; i++) {
+      const dx = waypoints[i][0] - waypoints[i - 1][0];
+      const dz = waypoints[i][1] - waypoints[i - 1][1];
+      arcLengths.push(arcLengths[i - 1] + Math.sqrt(dx * dx + dz * dz));
+    }
+    const totalLen = arcLengths[arcLengths.length - 1];
 
-    for (let j = 0; j <= segsAlong; j++) {
-      const t = j / segsAlong;
-      const center = curve.getPoint(t);
-      const tangent = curve.getTangent(t);
-      const perp = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-      const ly = (t - 0.5) * totalLen;
+    // Interpolate position and tangent at a given distance along the path
+    const sampleAt = (dist: number): { x: number; z: number; tx: number; tz: number } => {
+      dist = Math.max(0, Math.min(totalLen, dist));
+      let seg = 0;
+      for (let i = 1; i < arcLengths.length; i++) {
+        if (arcLengths[i] >= dist) { seg = i - 1; break; }
+      }
+      const segLen = arcLengths[seg + 1] - arcLengths[seg];
+      const t = segLen > 0 ? (dist - arcLengths[seg]) / segLen : 0;
+      const x = waypoints[seg][0] + (waypoints[seg + 1][0] - waypoints[seg][0]) * t;
+      const z = waypoints[seg][1] + (waypoints[seg + 1][1] - waypoints[seg][1]) * t;
+      const tx = waypoints[seg + 1][0] - waypoints[seg][0];
+      const tz = waypoints[seg + 1][1] - waypoints[seg][1];
+      const tLen = Math.sqrt(tx * tx + tz * tz) || 1;
+      return { x, z, tx: tx / tLen, tz: tz / tLen };
+    };
 
-      for (let k = 0; k <= segsAcross; k++) {
-        const crossT = k / segsAcross - 0.5;
-        const lx = crossT * pathWidth;
-        const idx = j * (segsAcross + 1) + k;
+    // Build mesh: rows along the path, columns across the width
+    const segsL = Math.max(30, Math.floor(totalLen * 4));
+    const segsW = Math.max(12, Math.floor(width * 8));
+    const rows = segsL + 1;
+    const cols = segsW + 1;
+    const vtxCount = rows * cols;
 
-        const wx = center.x + perp.x * lx;
-        const wz = center.z + perp.z * lx;
+    const positions = new Float32Array(vtxCount * 3);
+    const colors = new Float32Array(vtxCount * 3);
 
-        // Cobblestone grid
+    for (let r = 0; r < rows; r++) {
+      const dist = (r / segsL) * totalLen;
+      const { x: cx, z: cz, tx, tz } = sampleAt(dist);
+      // Normal (perpendicular to tangent in XZ plane)
+      const nx = -tz;
+      const nz = tx;
+
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c;
+        const across = ((c / segsW) - 0.5) * width; // -width/2 to +width/2
+
+        const wx = cx + nx * across;
+        const wz = cz + nz * across;
+
+        // Cobblestone pattern (same as straight paths)
         const stoneScale = 3.2;
-        const gx = lx * stoneScale;
-        const gy = ly * stoneScale;
+        const gx = across * stoneScale;
+        const gy = dist * stoneScale;
         const row = Math.floor(gy);
         const adjX = gx + (row % 2) * 0.5;
         const cellX = adjX - Math.floor(adjX) - 0.5;
         const cellY = gy - Math.floor(gy) - 0.5;
         const distToCenter = Math.sqrt(cellX * cellX + cellY * cellY);
 
-        const stoneShape = smoothstep(0.48, 0.32, distToCenter);
-        const h = stoneShape * 0.06;
+        const stoneShape = smoothstepJS(0.48, 0.32, distToCenter);
+        let h = stoneShape * 0.06;
 
         const stoneID_x = Math.floor(adjX);
         const stoneID_y = Math.floor(gy);
         const stoneRand = hashStone(stoneID_x, stoneID_y);
-        const heightVariation = stoneRand * 0.025;
-
-        posArr[idx * 3] = wx;
-        posArr[idx * 3 + 1] = 0.28 + h + heightVariation;
-        posArr[idx * 3 + 2] = wz;
+        h += stoneRand * 0.025;
 
         // Color
         const colorVar = hashStone(stoneID_x + 50, stoneID_y + 80);
         const colorVar2 = hashStone(stoneID_x + 120, stoneID_y + 30);
-        let r = 0.40 + colorVar * 0.18;
-        let g2 = 0.33 + colorVar * 0.14;
-        let b = 0.22 + colorVar2 * 0.10;
-
+        let cr = 0.40 + colorVar * 0.18;
+        let cg = 0.33 + colorVar * 0.14;
+        let cb = 0.22 + colorVar2 * 0.10;
         const groutDarken = stoneShape * 0.4 + 0.6;
-        r *= groutDarken;
-        g2 *= groutDarken;
-        b *= groutDarken;
-
+        cr *= groutDarken;
+        cg *= groutDarken;
+        cb *= groutDarken;
         if (stoneShape < 0.3 && colorVar2 > 0.6) {
-          g2 += 0.06;
-          r -= 0.03;
+          cg += 0.06;
+          cr -= 0.03;
         }
 
         // Edge fade
-        const edgeDist = Math.abs(lx) / (pathWidth / 2);
+        const edgeDist = Math.abs(across) / (width / 2);
         if (edgeDist > 0.75) {
           const fade = (edgeDist - 0.75) / 0.25;
           const f = fade * fade;
-          r = r * (1 - f) + 0.22 * f;
-          g2 = g2 * (1 - f) + 0.40 * f;
-          b = b * (1 - f) + 0.12 * f;
-          posArr[idx * 3 + 1] = 0.28 + (h + heightVariation) * (1 - f);
+          cr = cr * (1 - f) + 0.22 * f;
+          cg = cg * (1 - f) + 0.40 * f;
+          cb = cb * (1 - f) + 0.12 * f;
+          h *= (1 - f);
         }
 
-        colArr[idx * 3] = r;
-        colArr[idx * 3 + 1] = g2;
-        colArr[idx * 3 + 2] = b;
+        positions[idx * 3] = wx;
+        positions[idx * 3 + 1] = 0.28 + h;
+        positions[idx * 3 + 2] = wz;
+        colors[idx * 3] = cr;
+        colors[idx * 3 + 1] = cg;
+        colors[idx * 3 + 2] = cb;
       }
     }
 
-    // Build index buffer
-    const idxArr: number[] = [];
-    for (let j = 0; j < segsAlong; j++) {
-      for (let k = 0; k < segsAcross; k++) {
-        const a = j * (segsAcross + 1) + k;
-        const bb = a + 1;
-        const c = (j + 1) * (segsAcross + 1) + k;
-        const d = c + 1;
-        idxArr.push(a, bb, c);
-        idxArr.push(bb, d, c);
+    // Build index buffer (two triangles per quad)
+    const indices: number[] = [];
+    for (let r = 0; r < segsL; r++) {
+      for (let c = 0; c < segsW; c++) {
+        const a = r * cols + c;
+        const b = a + 1;
+        const d = a + cols;
+        const e = d + 1;
+        indices.push(a, d, b, b, d, e);
       }
     }
 
-    const curveGeo = new THREE.BufferGeometry();
-    curveGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-    curveGeo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
-    curveGeo.setIndex(idxArr);
-    curveGeo.computeVertexNormals();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
 
-    const curveMesh = new THREE.Mesh(curveGeo, new THREE.MeshStandardMaterial({
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.88,
       metalness: 0.02,
     }));
-    curveMesh.receiveShadow = true;
-    curveMesh.castShadow = true;
-    this.group.add(curveMesh);
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    this.group.add(mesh);
   }
 
   // Collision radius for the fountain base (used by LocalPlayer)
