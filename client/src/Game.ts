@@ -609,7 +609,7 @@ export class Game {
       }
 
       // NPC: E to interact
-      if (this.input.isKey('KeyE') && this.npcCooldown <= 0) {
+      if (this.input.isKey('KeyE') && this.npcCooldown <= 0 && !this.npcAI.isDialogVisible()) {
         for (const npc of this.hubWorld.npcPositions) {
           const dist = pos.distanceTo(npc.position);
           if (dist < 3) {

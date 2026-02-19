@@ -96,6 +96,11 @@ export class NPCAIManager {
 
   /** Returns false if models aren't ready (caller should use static dialog). */
   async interact(npcId: string): Promise<boolean> {
+    // Prevent re-entry if a conversation is already active
+    if (this.currentNpcId) {
+      return true;
+    }
+
     const profile = NPC_PROFILES[npcId];
     if (!profile) {
       console.log('[NPC-AI] No profile for:', npcId);
