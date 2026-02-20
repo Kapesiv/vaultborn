@@ -11,7 +11,9 @@ import {
   BASE_CRIT_CHANCE, CRIT_PER_DEX, CRIT_MULTIPLIER, MAX_CRIT_CHANCE,
   BASE_DODGE_CHANCE, DODGE_PER_DEX, MAX_DODGE_CHANCE,
   POTION_HEAL_AMOUNT, POTION_COOLDOWN,
+  CLASS_DEFS, VALID_CLASS_IDS,
   type PlayerInput, type Rarity, type DungeonRoomDef, type StatusEffectDef,
+  type CharacterClassId,
 } from '@saab/shared';
 import { distanceXZ } from '@saab/shared';
 import { InventoryService } from '../services/InventoryService.js';
@@ -181,7 +183,9 @@ export class DungeonRoom extends Room<DungeonState> {
         if (player) {
           const passive = this.inventory.computePassiveStats(client.sessionId);
           const saved = this.inventory.loadPlayerStats(client.sessionId);
-          const baseMaxHp = 100 + (saved.level - 1) * 10;
+          const classId = this.inventory.loadPlayerClass(client.sessionId);
+          const classDef = CLASS_DEFS[classId];
+          const baseMaxHp = classDef.maxHpBase + (saved.level - 1) * 10;
           player.stats.maxHp = Math.floor(baseMaxHp * passive.maxHpMult);
           player.stats.hp = Math.min(player.stats.hp, player.stats.maxHp);
           player.stats.skillPoints = result.skillPoints!;
@@ -1203,15 +1207,23 @@ export class DungeonRoom extends Room<DungeonState> {
     });
   }
 
-  onJoin(client: Client, options: { name?: string; gender?: string }) {
+  onJoin(client: Client, options: { name?: string; gender?: string; classId?: string }) {
     const playerName = options.name || `Player_${client.sessionId.slice(0, 4)}`;
 
-    this.inventory.ensurePlayer(client.sessionId, playerName);
+    const classId: CharacterClassId = VALID_CLASS_IDS.includes(options.classId as CharacterClassId)
+      ? (options.classId as CharacterClassId)
+      : 'warrior';
+
+    this.inventory.ensurePlayer(client.sessionId, playerName, classId);
+
+    const resolvedClassId = this.inventory.loadPlayerClass(client.sessionId);
+    const classDef = CLASS_DEFS[resolvedClassId];
 
     const player = new PlayerState();
     player.id = client.sessionId;
     player.name = playerName;
     player.gender = options.gender === 'female' ? 'female' : 'male';
+    player.classId = resolvedClassId;
     player.position = new Vec3State();
     player.position.x = 0;
     player.position.z = -8;
@@ -1226,12 +1238,12 @@ export class DungeonRoom extends Room<DungeonState> {
     stats.intelligence = saved.intelligence;
     stats.dexterity = saved.dexterity;
     stats.vitality = saved.vitality;
-    // Apply passive bonuses
+    // Apply passive bonuses with class-specific base HP/mana
     const passive = this.inventory.computePassiveStats(client.sessionId);
-    const baseMaxHp = 100 + (saved.level - 1) * 10;
+    const baseMaxHp = classDef.maxHpBase + (saved.level - 1) * 10;
     stats.maxHp = Math.floor(baseMaxHp * passive.maxHpMult);
     stats.hp = stats.maxHp;
-    stats.maxMana = 50 + (saved.level - 1) * 5;
+    stats.maxMana = classDef.maxManaBase + (saved.level - 1) * 5;
     stats.mana = stats.maxMana;
     stats.skillPoints = this.inventory.getSkillPoints(client.sessionId);
     player.stats = stats;

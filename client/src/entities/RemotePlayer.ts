@@ -1,8 +1,7 @@
 import * as THREE from 'three';
-import { lerpNumber } from '@saab/shared';
+import { lerpNumber, CLASS_DEFS, type CharacterClassId } from '@saab/shared';
 import { CharacterController } from './CharacterController.js';
 import { characterLoader } from './CharacterLoader.js';
-import type { Gender } from './LocalPlayer.js';
 
 export class RemotePlayer {
   public mesh: THREE.Group;
@@ -13,8 +12,10 @@ export class RemotePlayer {
 
   private prevPosition = new THREE.Vector3();
   private controller: CharacterController;
+  private classId: CharacterClassId;
 
-  constructor(scene: THREE.Scene, public id: string, public name: string, gender: Gender = 'male') {
+  constructor(scene: THREE.Scene, public id: string, public name: string, classId: CharacterClassId = 'warrior') {
+    this.classId = classId;
     this.controller = new CharacterController();
     this.mesh = this.controller.group;
 
@@ -28,7 +29,8 @@ export class RemotePlayer {
 
   private async loadModel() {
     try {
-      const { scene: model, animations } = await characterLoader.getClone('/models/player.glb');
+      const modelPath = CLASS_DEFS[this.classId].modelPath;
+      const { scene: model, animations } = await characterLoader.getClone(modelPath);
 
       try {
         const walkClips = await characterLoader.loadAnimationClips('/models/walking.glb');

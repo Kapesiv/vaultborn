@@ -5,6 +5,7 @@ export * from './types/combat.js';
 export * from './types/dungeon.js';
 export * from './types/loot.js';
 export * from './types/skill.js';
+export * from './types/class.js';
 
 // Constants
 export * from './constants/game.js';
@@ -12,6 +13,7 @@ export * from './constants/items.js';
 export * from './constants/skills.js';
 export * from './constants/dungeons.js';
 export * from './constants/shop.js';
+export * from './constants/classes.js';
 
 // Utils
 export * from './utils/math.js';

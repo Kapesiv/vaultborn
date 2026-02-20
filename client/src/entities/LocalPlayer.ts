@@ -1,21 +1,23 @@
 import * as THREE from 'three';
-import { computeMovement, type PlayerInput } from '@saab/shared';
+import { computeMovement, CLASS_DEFS, type PlayerInput, type CharacterClassId } from '@saab/shared';
 import { CharacterController } from './CharacterController.js';
 import { characterLoader } from './CharacterLoader.js';
 import type { WorldCollider } from '../world/HubWorld.js';
 import { downscaleTextures } from '../utils/downscaleTextures.js';
 import { getGLTFLoader } from '../utils/getGLTFLoader.js';
+import { DropSpawnEffect } from '../effects/DropSpawnEffect.js';
 
 export type Gender = 'male' | 'female';
 
 export class LocalPlayer {
   public mesh: THREE.Group;
-  public position = new THREE.Vector3(0, 0, 26);
+  public position = new THREE.Vector3(0, 0, 10);
   public rotation = 0;
-  public gender: Gender;
+  public gender: Gender = 'male';
+  public classId: CharacterClassId;
 
   // Visual smoothing — mesh lerps toward logic position
-  private visualPos = new THREE.Vector3(0, 0, 26);
+  private visualPos = new THREE.Vector3(0, 0, 10);
   private visualRot = 0;
   private targetRotation = 0;
 
@@ -23,9 +25,6 @@ export class LocalPlayer {
   private attackAnimation = 0;
   private velocityY = 0;
   private isGrounded = true;
-  private spawnGlow: THREE.Mesh | null = null;
-  private spawnTimer = 2.0;
-
   // Equipment state
   private weaponType = 'bone-club';
   private armorTier = 0;
@@ -41,8 +40,11 @@ export class LocalPlayer {
   // GLB character controller
   private controller: CharacterController;
 
-  constructor(scene: THREE.Scene, gender: Gender) {
-    this.gender = gender;
+  // Drop spawn effect
+  private spawnEffect: DropSpawnEffect | null = null;
+
+  constructor(scene: THREE.Scene, classId: CharacterClassId) {
+    this.classId = classId;
     this.controller = new CharacterController();
     this.mesh = this.controller.group;
     scene.add(this.mesh);
@@ -50,27 +52,20 @@ export class LocalPlayer {
     // Load character model directly
     this.loadModel();
 
-    // Spawn glow effect - ring of light around player
-    const glowMat = new THREE.MeshBasicMaterial({
-      color: 0x55ccff,
-      transparent: true,
-      opacity: 0.7,
-      side: THREE.DoubleSide,
-    });
-    this.spawnGlow = new THREE.Mesh(new THREE.RingGeometry(0.3, 1.8, 32), glowMat);
-    this.spawnGlow.rotation.x = -Math.PI / 2;
-    this.spawnGlow.position.y = 0.05;
-    this.mesh.add(this.spawnGlow);
-
     // Nameplate with level
     this.nameSprite = this.createNameplate('Adventurer', 1);
     this.mesh.add(this.nameSprite);
+
+    // Start drop spawn effect
+    const classColor = parseInt(CLASS_DEFS[classId].color.replace('#', ''), 16);
+    this.spawnEffect = new DropSpawnEffect(scene, classColor);
   }
 
   private async loadModel() {
     try {
-      console.log('[LocalPlayer] Loading player.glb...');
-      const { scene: model, animations } = await characterLoader.getClone('/models/player.glb');
+      const modelPath = CLASS_DEFS[this.classId].modelPath;
+      console.log(`[LocalPlayer] Loading ${modelPath}...`);
+      const { scene: model, animations } = await characterLoader.getClone(modelPath);
       console.log(`[LocalPlayer] Loaded OK, ${animations.length} anims`);
 
       // Load walk animation from separate FBX file
@@ -997,12 +992,13 @@ export class LocalPlayer {
   applyFrameMovement(
     yaw: number, dt: number,
     forward: boolean, backward: boolean, left: boolean, right: boolean,
-    jump: boolean,
+    jump: boolean, sprint = false,
   ) {
     const move = computeMovement({
       seq: -1, forward, backward, left, right, jump: false,
-      rotation: yaw, dt,
+      sprint, rotation: yaw, dt,
     });
+
     this.position.x += move.dx;
     this.position.z += move.dz;
 
@@ -1020,16 +1016,14 @@ export class LocalPlayer {
     }
     this.position.y += this.velocityY * dt;
 
-    this.isGrounded = false;
     const floorY = this.getFloorHeight();
-
+    this.isGrounded = false;
     if (this.position.y <= floorY) {
       this.position.y = floorY;
       this.velocityY = 0;
       this.isGrounded = true;
     }
 
-    this.altarWall();
     this.shopWall();
     this.fountainWall();
     this.worldColliderWalls();
@@ -1052,18 +1046,6 @@ export class LocalPlayer {
     }
   }
 
-  // Altar collision - 3 visual tiers, all scaled 0.65x, centred at (0, 15)
-  private static readonly AX = 0;
-  private static readonly AZ = 15;
-  private static readonly T_TOP_R = 1.3;
-  private static readonly T_MID_R = 2.08;
-  private static readonly T_BOT_R = 2.925;
-  private static readonly T_TOP_H = 0.91;
-  private static readonly T_MID_H = 0.65;
-  private static readonly T_BOT_H = 0.325;
-  private static readonly RAMP = 2.0;
-  private static readonly RHW = 1.0;
-
   private static readonly FNT_R = 3.6;
 
   private static readonly SHOP_X1 = -31.3;
@@ -1073,18 +1055,6 @@ export class LocalPlayer {
 
   private getFloorHeight(): number {
     return 0;
-  }
-
-  private altarWall() {
-    const { AX, AZ, T_BOT_R, T_BOT_H } = LocalPlayer;
-    const dx = this.position.x - AX;
-    const dz = this.position.z - AZ;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-
-    if (dist < T_BOT_R && this.position.y < T_BOT_H - 0.1 && dist > 0.001) {
-      this.position.x = AX + (dx / dist) * (T_BOT_R + 0.05);
-      this.position.z = AZ + (dz / dist) * (T_BOT_R + 0.05);
-    }
   }
 
   private fountainWall() {
@@ -1159,19 +1129,31 @@ export class LocalPlayer {
       this.position.x = reconX;
       this.position.z = reconZ;
     } else {
-      // Small correction: blend smoothly
-      this.position.x += dx * 0.3;
-      this.position.z += dz * 0.3;
+      // Small correction: blend smoothly over several frames
+      this.position.x += dx * 0.15;
+      this.position.z += dz * 0.15;
     }
   }
 
   update(dt: number, time: number, isMoving: boolean, cameraYaw?: number, isSprinting = false, isCrouching = false, isMovingBackward = false) {
+    // ── Drop spawn effect ────────────────────────────────────────
+    if (this.spawnEffect) {
+      this.spawnEffect.update(dt);
+      this.spawnEffect.setPosition(this.position.x, this.position.z);
+      if (!this.spawnEffect.alive) {
+        this.spawnEffect.dispose();
+        this.spawnEffect = null;
+      }
+    }
+
     // ── Smooth visual interpolation ────────────────────────────────
     const posLerp = Math.min(1, dt * 20);
     this.visualPos.x += (this.position.x - this.visualPos.x) * posLerp;
     this.visualPos.y += (this.position.y - this.visualPos.y) * posLerp;
     this.visualPos.z += (this.position.z - this.visualPos.z) * posLerp;
     this.mesh.position.copy(this.visualPos);
+    // Apply spawn drop offset
+    if (this.spawnEffect) this.mesh.position.y += this.spawnEffect.yOffset;
 
     // Face camera direction so weapon points where you're looking
     const aimTarget = cameraYaw != null ? cameraYaw : this.targetRotation;
@@ -1189,10 +1171,8 @@ export class LocalPlayer {
     if (this.attackAnimation > 0) {
       this.attackAnimation -= dt;
       needsWeaponDrawn = true;
-    } else if (isCrouching && isMoving) {
-      this.controller.transitionTo('crouch');
     } else if (isCrouching) {
-      this.controller.transitionTo('crouchIdle');
+      this.controller.transitionTo('crouch');
     } else if (isMoving && isSprinting) {
       this.controller.transitionTo('run');
     } else if (isMoving && isMovingBackward && this.controller.hasBackwardWalk) {
@@ -1274,21 +1254,10 @@ export class LocalPlayer {
       }
     }
 
-    // Spawn glow fade out
-    if (this.spawnGlow && this.spawnTimer > 0) {
-      this.spawnTimer -= dt;
-      const t = Math.max(0, this.spawnTimer / 2.0);
-      (this.spawnGlow.material as THREE.MeshBasicMaterial).opacity = t * 0.7;
-      this.spawnGlow.scale.set(1 + (1 - t) * 0.5, 1 + (1 - t) * 0.5, 1);
-      this.spawnGlow.rotation.z = time * 2;
-      if (this.spawnTimer <= 0) {
-        this.mesh.remove(this.spawnGlow);
-        this.spawnGlow = null;
-      }
-    }
   }
 
   dispose(scene: THREE.Scene) {
+    if (this.spawnEffect) { this.spawnEffect.dispose(); this.spawnEffect = null; }
     scene.remove(this.mesh);
   }
 }

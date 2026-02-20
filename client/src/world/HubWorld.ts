@@ -117,6 +117,25 @@ export class HubWorld {
 
   private riverMesh: THREE.Mesh | null = null;
 
+  // Cached object references for update() — avoids getObjectByName every frame
+  private _animCache: Record<string, THREE.Object3D | null> = {};
+  private _animCacheBuilt = false;
+
+  private getAnimObj(name: string): THREE.Object3D | null {
+    if (!this._animCacheBuilt) {
+      this._animCacheBuilt = true;
+      // Pre-cache all animated objects
+      this.group.traverse((obj) => {
+        if (obj.name) this._animCache[obj.name] = obj;
+      });
+    }
+    if (name in this._animCache) return this._animCache[name];
+    // Fallback lookup & cache
+    const found = this.group.getObjectByName(name) ?? null;
+    this._animCache[name] = found;
+    return found;
+  }
+
   // Cave entrance data (animations handled by named objects)
 
   constructor(scene: THREE.Scene) {
@@ -131,9 +150,8 @@ export class HubWorld {
     this.buildPvPArena(batcher);
     this.buildCaveEntrance();
     this.buildNPCs();
-    // this.buildSpawnAltar();
     this.buildDecorations(batcher);
-    this.buildRocks(batcher);
+    // this.buildRocks(batcher);
     this.buildRiver();
 
     this.buildLighting();
@@ -197,7 +215,6 @@ export class HubWorld {
 
     const paths = [
       { from: [0, 0], to: [0, -38], width: 3 },       // North to portal
-      { from: [0, 0], to: [0, 26], width: 2.5 },      // South spawn
     ];
 
     // Curved paths — single continuous mesh per curve
@@ -613,7 +630,7 @@ export class HubWorld {
 
     {
       const loader = getGLTFLoader();
-      loader.load('/models/shop.glb', (gltf) => {
+      loader.load('/models/medieval_shop.glb', (gltf) => {
         const model = gltf.scene;
         model.name = 'shop-stall';
 
@@ -625,11 +642,10 @@ export class HubWorld {
         });
         downscaleTextures(model);
 
-        // Scale to fit: target ~6m wide footprint
+        // Scale to match center tree height (~20m)
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
-        const targetWidth = 6;
-        const scale = targetWidth / Math.max(size.x, size.z, 0.01);
+        const scale = 20 / Math.max(size.y, 0.01);
         model.scale.setScalar(scale);
 
         // Rotate so the front faces towards the tree/fountain (towards +X)
@@ -889,29 +905,15 @@ export class HubWorld {
 
 
   private buildNPCs() {
-    const npcs = [
-      {
-        name: 'Gernal',
-        position: new THREE.Vector3(-23, 0, -12),
-        color: 0xaa4422,
-        isShopkeeper: true,
-        dialog: [
-          'Welcome to me shop, traveller! Finest goods in all the land!',
-          'Bring me materials and I can craft something special!',
-          'Wolf pelts make excellent armor, if you gather enough...',
-          'The ancient forest wood combined with sturdy pelts makes a fine bow...',
-        ],
-      },
+    const npcs: { name: string; position: THREE.Vector3; color: number; dialog: string[]; isScout?: boolean; isBattlemaster?: boolean; isElder?: boolean }[] = [
     ];
 
     for (const npc of npcs) {
-      if ((npc as any).isShopkeeper) {
-        this.createGernalMesh(npc.position);
-      } else if ((npc as any).isScout) {
+      if (npc.isScout) {
         this.createScoutMesh(npc.name, npc.position);
-      } else if ((npc as any).isBattlemaster) {
+      } else if (npc.isBattlemaster) {
         this.createBattlemasterMesh(npc.name, npc.position);
-      } else if ((npc as any).isElder) {
+      } else if (npc.isElder) {
         this.createElderMesh(npc.name, npc.position);
       } else {
         this.createNPCMesh(npc.name, npc.position, npc.color);
@@ -925,534 +927,6 @@ export class HubWorld {
       });
       this.colliders.push({ x: npc.position.x, z: npc.position.z, r: 0.5 });
     }
-  }
-
-  private createGernalMesh(pos: THREE.Vector3) {
-    const g = new THREE.Group();
-    g.position.copy(pos);
-    g.name = 'npc-Gernal';
-
-    // Floating name + "!" indicator
-    const canvas2 = document.createElement('canvas');
-    canvas2.width = 256;
-    canvas2.height = 96;
-    const ctx2 = canvas2.getContext('2d')!;
-    ctx2.font = 'bold 40px Arial';
-    ctx2.textAlign = 'center';
-    ctx2.fillStyle = '#FFD700';
-    ctx2.fillText('!', 128, 35);
-    ctx2.font = 'bold 22px Arial';
-    ctx2.fillStyle = '#ffffff';
-    ctx2.strokeStyle = '#000000';
-    ctx2.lineWidth = 3;
-    ctx2.strokeText('Gernal', 128, 75);
-    ctx2.fillText('Gernal', 128, 75);
-    const tex2 = new THREE.CanvasTexture(canvas2);
-    const spriteMat2 = new THREE.SpriteMaterial({ map: tex2, transparent: true });
-    const sprite2 = new THREE.Sprite(spriteMat2);
-    sprite2.position.y = 3.3;
-    sprite2.scale.set(2.5, 0.9, 1);
-    g.add(sprite2);
-    this.group.add(g);
-
-    // Load GLB model
-    {
-      const loader = getGLTFLoader();
-      loader.load('/models/old_man_character_concept_meshy.glb', (gltf) => {
-        const model = gltf.scene;
-        // Strip environment spheres (huge meshes baked in by Meshy/Blender)
-        this.stripEnvSpheres(model);
-        model.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh) { child.castShadow = true; child.receiveShadow = true; }
-        });
-        downscaleTextures(model);
-        const box = new THREE.Box3().setFromObject(model);
-        const size = box.getSize(new THREE.Vector3());
-        const scale = 2.5 / Math.max(size.y, 0.01);
-        model.scale.setScalar(scale);
-        model.updateMatrixWorld(true);
-        const groundBox = new THREE.Box3().setFromObject(model);
-        model.position.y -= groundBox.min.y;
-        g.add(model);
-        console.log(`[HubWorld] Gernal GLB loaded, scale: ${scale.toFixed(2)}`);
-      }, undefined, (err) => { console.error('[HubWorld] Failed to load Gernal GLB:', err); });
-    }
-    return; // Skip old procedural mesh below
-
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0xd4a574, roughness: 0.75 });
-    const skinDark = new THREE.MeshStandardMaterial({ color: 0xc49464, roughness: 0.8 });
-    const beardMat = new THREE.MeshStandardMaterial({ color: 0x8a7a6a, roughness: 0.92 });
-    const hairMat = new THREE.MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.9 });
-    const apronMat = new THREE.MeshStandardMaterial({ color: 0x5a3322, roughness: 0.85 });
-    const shirtMat = new THREE.MeshStandardMaterial({ color: 0x886644, roughness: 0.8 });
-    const pantsMat = new THREE.MeshStandardMaterial({ color: 0x44332a, roughness: 0.85 });
-    const bootMat = new THREE.MeshStandardMaterial({ color: 0x2a1a0a, roughness: 0.9 });
-    const eyeWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf0f0e8, roughness: 0.3 });
-    const eyeIrisMat = new THREE.MeshStandardMaterial({ color: 0x4a6a44, roughness: 0.3 });
-    const eyePupilMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-
-    // ============================
-    // LEGS & BOOTS
-    // ============================
-    for (const side of [-1, 1]) {
-      const thigh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.22, 0.2, 0.7, 8), pantsMat,
-      );
-      thigh.position.set(side * 0.2, 0.75, 0);
-      thigh.castShadow = true;
-      g.add(thigh);
-
-      const shin = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.17, 0.15, 0.6, 8), pantsMat,
-      );
-      shin.position.set(side * 0.2, 0.3, 0);
-      shin.castShadow = true;
-      g.add(shin);
-
-      const boot = new THREE.Mesh(
-        new THREE.BoxGeometry(0.22, 0.18, 0.35), bootMat,
-      );
-      boot.position.set(side * 0.2, 0.09, 0.05);
-      boot.castShadow = true;
-      g.add(boot);
-
-      // Boot buckle
-      const buckle = new THREE.Mesh(
-        new THREE.BoxGeometry(0.08, 0.06, 0.02),
-        new THREE.MeshStandardMaterial({ color: 0x999933, metalness: 0.7, roughness: 0.3 }),
-      );
-      buckle.position.set(side * 0.2, 0.12, 0.23);
-      g.add(buckle);
-    }
-
-    // ============================
-    // BODY — BIG BELLY
-    // ============================
-    const lowerTorso = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.45, 0.35, 0.5, 10), shirtMat,
-    );
-    lowerTorso.position.y = 1.25;
-    lowerTorso.castShadow = true;
-    g.add(lowerTorso);
-
-    // The glorious big belly
-    const belly = new THREE.Mesh(
-      new THREE.SphereGeometry(0.58, 14, 12), shirtMat,
-    );
-    belly.position.set(0, 1.5, 0.18);
-    belly.scale.set(1, 0.85, 1.15);
-    belly.castShadow = true;
-    g.add(belly);
-
-    // Upper chest
-    const chest = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.42, 0.5, 0.45, 10), shirtMat,
-    );
-    chest.position.y = 1.88;
-    chest.castShadow = true;
-    g.add(chest);
-
-    // Shirt collar
-    const collar = new THREE.Mesh(
-      new THREE.TorusGeometry(0.2, 0.04, 6, 12), shirtMat,
-    );
-    collar.position.y = 2.08;
-    collar.rotation.x = Math.PI / 2;
-    g.add(collar);
-
-    // Leather apron over belly
-    const apron = new THREE.Mesh(
-      new THREE.BoxGeometry(0.72, 0.95, 0.04), apronMat,
-    );
-    apron.position.set(0, 1.35, 0.5);
-    g.add(apron);
-
-    // Apron pocket
-    const pocket = new THREE.Mesh(
-      new THREE.BoxGeometry(0.25, 0.2, 0.02),
-      new THREE.MeshStandardMaterial({ color: 0x4a2818, roughness: 0.88 }),
-    );
-    pocket.position.set(0.12, 1.2, 0.52);
-    g.add(pocket);
-
-    // Apron strings around waist
-    for (const side of [-1, 1]) {
-      const strap = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.015, 0.015, 0.55, 4), apronMat,
-      );
-      strap.position.set(side * 0.36, 1.7, 0.3);
-      strap.rotation.z = side * 0.3;
-      strap.rotation.x = -0.25;
-      g.add(strap);
-    }
-
-    // Belt
-    const belt = new THREE.Mesh(
-      new THREE.TorusGeometry(0.46, 0.035, 6, 16, Math.PI),
-      new THREE.MeshStandardMaterial({ color: 0x3a2211, roughness: 0.8 }),
-    );
-    belt.position.set(0, 1.15, 0.1);
-    belt.rotation.x = Math.PI / 2;
-    g.add(belt);
-
-    // Belt buckle
-    const beltBuckle = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.1, 0.03),
-      new THREE.MeshStandardMaterial({ color: 0xbbaa44, metalness: 0.7, roughness: 0.3 }),
-    );
-    beltBuckle.position.set(0, 1.15, 0.47);
-    g.add(beltBuckle);
-
-    // ============================
-    // ARMS — muscular, rolled sleeves
-    // ============================
-    for (const side of [-1, 1]) {
-      const shoulder = new THREE.Mesh(
-        new THREE.SphereGeometry(0.19, 8, 6), shirtMat,
-      );
-      shoulder.position.set(side * 0.52, 1.95, 0);
-      g.add(shoulder);
-
-      const upperArm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.13, 0.15, 0.5, 6), shirtMat,
-      );
-      upperArm.position.set(side * 0.58, 1.65, 0.1);
-      upperArm.rotation.z = side * 0.25;
-      upperArm.rotation.x = -0.2;
-      g.add(upperArm);
-
-      // Rolled-up sleeve edge
-      const sleeveRoll = new THREE.Mesh(
-        new THREE.TorusGeometry(0.14, 0.025, 6, 8), shirtMat,
-      );
-      sleeveRoll.position.set(side * 0.6, 1.45, 0.15);
-      sleeveRoll.rotation.x = Math.PI / 2;
-      g.add(sleeveRoll);
-
-      // Forearm (bare skin, hairy)
-      const forearm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.1, 0.13, 0.45, 6), skinMat,
-      );
-      forearm.position.set(side * 0.62, 1.3, 0.28);
-      forearm.rotation.x = -0.5;
-      g.add(forearm);
-
-      // Hand
-      const hand = new THREE.Mesh(
-        new THREE.SphereGeometry(0.1, 8, 6), skinMat,
-      );
-      hand.position.set(side * 0.62, 1.1, 0.42);
-      hand.scale.set(1, 0.7, 1.2);
-      g.add(hand);
-
-      // Thick sausage fingers
-      for (let f = 0; f < 4; f++) {
-        const finger = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.022, 0.028, 0.1, 5), skinMat,
-        );
-        finger.position.set(
-          side * 0.62 + (f - 1.5) * 0.03,
-          1.03, 0.44 + f * 0.015,
-        );
-        finger.rotation.x = -0.3;
-        g.add(finger);
-      }
-      // Thumb
-      const thumb = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.022, 0.026, 0.08, 4), skinMat,
-      );
-      thumb.position.set(side * (0.62 + side * 0.06), 1.08, 0.38);
-      thumb.rotation.z = side * 0.6;
-      g.add(thumb);
-    }
-
-    // ============================
-    // NECK — thick, stocky
-    // ============================
-    const neck = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.2, 0.18, 8), skinMat,
-    );
-    neck.position.y = 2.15;
-    g.add(neck);
-
-    // ============================
-    // HEAD — round, weathered face
-    // ============================
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.33, 14, 12), skinMat,
-    );
-    head.position.y = 2.46;
-    head.scale.set(1, 1.05, 0.95);
-    head.castShadow = true;
-    g.add(head);
-
-    // Forehead wrinkles
-    for (let w = 0; w < 3; w++) {
-      const wrinkle = new THREE.Mesh(
-        new THREE.BoxGeometry(0.22 - w * 0.04, 0.008, 0.01),
-        new THREE.MeshStandardMaterial({ color: 0xb89060, roughness: 0.9 }),
-      );
-      wrinkle.position.set(0, 2.58 + w * 0.035, 0.28);
-      g.add(wrinkle);
-    }
-
-    // Rosy cheeks
-    for (const side of [-1, 1]) {
-      const cheek = new THREE.Mesh(
-        new THREE.SphereGeometry(0.1, 8, 6),
-        new THREE.MeshStandardMaterial({ color: 0xd49080, roughness: 0.8 }),
-      );
-      cheek.position.set(side * 0.2, 2.38, 0.22);
-      cheek.scale.set(1, 0.65, 0.7);
-      g.add(cheek);
-    }
-
-    // Big bulbous nose
-    const noseBridge = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.05, 0.12, 6), skinDark,
-    );
-    noseBridge.position.set(0, 2.48, 0.3);
-    noseBridge.rotation.x = -0.2;
-    g.add(noseBridge);
-
-    const noseBulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.065, 8, 6), skinDark,
-    );
-    noseBulb.position.set(0, 2.42, 0.32);
-    g.add(noseBulb);
-
-    // Nostrils
-    for (const side of [-1, 1]) {
-      const nostril = new THREE.Mesh(
-        new THREE.SphereGeometry(0.022, 4, 4),
-        new THREE.MeshStandardMaterial({ color: 0x8a6a5a }),
-      );
-      nostril.position.set(side * 0.035, 2.39, 0.36);
-      g.add(nostril);
-    }
-
-    // ============================
-    // EYES — small, friendly
-    // ============================
-    for (const side of [-1, 1]) {
-      const socket = new THREE.Mesh(
-        new THREE.SphereGeometry(0.065, 6, 6), skinDark,
-      );
-      socket.position.set(side * 0.12, 2.49, 0.26);
-      g.add(socket);
-
-      const eyeball = new THREE.Mesh(
-        new THREE.SphereGeometry(0.05, 8, 8), eyeWhiteMat,
-      );
-      eyeball.position.set(side * 0.12, 2.49, 0.28);
-      g.add(eyeball);
-
-      const iris = new THREE.Mesh(
-        new THREE.SphereGeometry(0.028, 8, 8), eyeIrisMat,
-      );
-      iris.position.set(side * 0.12, 2.49, 0.318);
-      g.add(iris);
-
-      const pupil = new THREE.Mesh(
-        new THREE.SphereGeometry(0.014, 4, 4), eyePupilMat,
-      );
-      pupil.position.set(side * 0.12, 2.49, 0.335);
-      g.add(pupil);
-
-      // Crow's feet (wrinkles by eyes)
-      for (let c = 0; c < 3; c++) {
-        const crow = new THREE.Mesh(
-          new THREE.BoxGeometry(0.06, 0.006, 0.005),
-          new THREE.MeshStandardMaterial({ color: 0xb89060 }),
-        );
-        crow.position.set(side * 0.22, 2.49 + (c - 1) * 0.025, 0.24);
-        crow.rotation.z = side * (0.15 + c * 0.12);
-        g.add(crow);
-      }
-
-      // Big bushy eyebrow
-      const brow = new THREE.Mesh(
-        new THREE.BoxGeometry(0.16, 0.045, 0.06), hairMat,
-      );
-      brow.position.set(side * 0.12, 2.56, 0.27);
-      brow.rotation.z = side * -0.12;
-      g.add(brow);
-
-      // Bushy tufts sticking out
-      for (let t = 0; t < 2; t++) {
-        const tuft = new THREE.Mesh(
-          new THREE.ConeGeometry(0.02, 0.06, 4), hairMat,
-        );
-        tuft.position.set(side * (0.16 + t * 0.05), 2.575, 0.27);
-        tuft.rotation.z = side * (-0.4 - t * 0.3);
-        g.add(tuft);
-      }
-    }
-
-    // Mouth
-    const mouth = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.012, 0.015),
-      new THREE.MeshStandardMaterial({ color: 0x994444 }),
-    );
-    mouth.position.set(0, 2.34, 0.31);
-    g.add(mouth);
-
-    // Ears — large, sticking out
-    for (const side of [-1, 1]) {
-      const ear = new THREE.Mesh(
-        new THREE.SphereGeometry(0.065, 6, 6), skinMat,
-      );
-      ear.position.set(side * 0.33, 2.45, 0.02);
-      ear.scale.set(0.45, 1.1, 0.8);
-      g.add(ear);
-
-      // Ear lobe
-      const lobe = new THREE.Mesh(
-        new THREE.SphereGeometry(0.03, 4, 4), skinDark,
-      );
-      lobe.position.set(side * 0.34, 2.38, 0.04);
-      g.add(lobe);
-    }
-
-    // ============================
-    // LONG MAGNIFICENT BEARD
-    // ============================
-    // Jaw beard base
-    const beardJaw = new THREE.Mesh(
-      new THREE.SphereGeometry(0.28, 10, 8), beardMat,
-    );
-    beardJaw.position.set(0, 2.28, 0.18);
-    beardJaw.scale.set(1.2, 0.55, 1);
-    g.add(beardJaw);
-
-    // Cheek beard sides
-    for (const side of [-1, 1]) {
-      const cheekBeard = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12, 6, 6), beardMat,
-      );
-      cheekBeard.position.set(side * 0.22, 2.32, 0.15);
-      cheekBeard.scale.set(0.8, 0.9, 0.7);
-      g.add(cheekBeard);
-    }
-
-    // Mid beard — flowing down chest
-    const beardMid = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.24, 0.55, 8), beardMat,
-    );
-    beardMid.position.set(0, 2.0, 0.25);
-    beardMid.castShadow = true;
-    g.add(beardMid);
-
-    // Lower beard — long section
-    const beardLower = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.2, 0.55, 8), beardMat,
-    );
-    beardLower.position.set(0, 1.55, 0.3);
-    beardLower.castShadow = true;
-    g.add(beardLower);
-
-    // Beard tip — reaching belly!
-    const beardTip = new THREE.Mesh(
-      new THREE.ConeGeometry(0.12, 0.45, 6), beardMat,
-    );
-    beardTip.position.set(0, 1.1, 0.35);
-    beardTip.name = 'gernal-beard-tip';
-    g.add(beardTip);
-
-    // Beard wave details (layered strips for texture)
-    for (let w = 0; w < 4; w++) {
-      const wave = new THREE.Mesh(
-        new THREE.TorusGeometry(0.14 + w * 0.02, 0.02, 4, 12, Math.PI),
-        beardMat,
-      );
-      wave.position.set(0, 1.9 - w * 0.2, 0.32 + w * 0.015);
-      wave.rotation.y = Math.PI;
-      g.add(wave);
-    }
-
-    // Side wisps
-    for (const side of [-1, 1]) {
-      const wisp = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.04, 0.07, 0.45, 5), beardMat,
-      );
-      wisp.position.set(side * 0.2, 2.05, 0.18);
-      wisp.rotation.z = side * 0.2;
-      g.add(wisp);
-    }
-
-    // Magnificent handlebar mustache
-    for (const side of [-1, 1]) {
-      const stache = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.028, 0.045, 0.22, 5), beardMat,
-      );
-      stache.position.set(side * 0.1, 2.36, 0.33);
-      stache.rotation.z = side * 1.1;
-      g.add(stache);
-
-      // Curl at end
-      const curl = new THREE.Mesh(
-        new THREE.SphereGeometry(0.035, 6, 6), beardMat,
-      );
-      curl.position.set(side * 0.22, 2.34, 0.3);
-      g.add(curl);
-    }
-
-    // ============================
-    // HAIR — balding on top, thick on sides
-    // ============================
-    for (const side of [-1, 1]) {
-      const sideHair = new THREE.Mesh(
-        new THREE.SphereGeometry(0.16, 8, 6), hairMat,
-      );
-      sideHair.position.set(side * 0.29, 2.5, -0.06);
-      sideHair.scale.set(0.55, 1, 0.8);
-      g.add(sideHair);
-    }
-
-    const backHair = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 8, 6), hairMat,
-    );
-    backHair.position.set(0, 2.42, -0.22);
-    backHair.scale.set(1.2, 1, 0.6);
-    g.add(backHair);
-
-    // Shiny bald top
-    const baldTop = new THREE.Mesh(
-      new THREE.SphereGeometry(0.2, 10, 8),
-      new THREE.MeshStandardMaterial({ color: 0xdaad7a, roughness: 0.5, metalness: 0.05 }),
-    );
-    baldTop.position.set(0, 2.62, 0.03);
-    baldTop.scale.set(1, 0.4, 1);
-    g.add(baldTop);
-
-    // ============================
-    // NAME LABEL
-    // ============================
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 96;
-    const ctx = canvas.getContext('2d')!;
-    ctx.font = 'bold 40px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#FFD700';
-    ctx.fillText('!', 128, 35);
-    ctx.font = 'bold 22px Arial';
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 3;
-    ctx.strokeText('Gernal', 128, 75);
-    ctx.fillText('Gernal', 128, 75);
-
-    const tex = new THREE.CanvasTexture(canvas);
-    const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
-    const sprite = new THREE.Sprite(spriteMat);
-    sprite.position.y = 3.3;
-    sprite.scale.set(2.5, 0.9, 1);
-    g.add(sprite);
-
-    g.position.copy(pos);
-    g.name = 'npc-Gernal';
-    this.group.add(g);
   }
 
   private createNPCMesh(name: string, pos: THREE.Vector3, color: number) {
@@ -1707,219 +1181,6 @@ export class HubWorld {
     }
   }
 
-  private buildSpawnAltar() {
-    const altarGroup = new THREE.Group();
-    const cx = 0, cz = 0; // local coords inside group
-
-    // --- Raised stone platform (3 tiers) ---
-    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x6b6b78, roughness: 0.75, metalness: 0.1 });
-    const stoneLight = new THREE.MeshStandardMaterial({ color: 0x8a8a96, roughness: 0.7, metalness: 0.15 });
-    const stoneDark = new THREE.MeshStandardMaterial({ color: 0x50505c, roughness: 0.8 });
-
-    // Bottom tier - wide octagonal base
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 5, 0.5, 8), stoneDark);
-    base.position.set(cx, 0.25, cz);
-    base.receiveShadow = true;
-    base.castShadow = true;
-    altarGroup.add(base);
-
-    // Middle tier
-    const mid = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.8, 0.5, 8), stoneMat);
-    mid.position.set(cx, 0.75, cz);
-    mid.receiveShadow = true;
-    mid.castShadow = true;
-    altarGroup.add(mid);
-
-    // Top tier - the altar surface
-    const top = new THREE.Mesh(new THREE.CylinderGeometry(2, 2.6, 0.4, 8), stoneLight);
-    top.position.set(cx, 1.2, cz);
-    top.receiveShadow = true;
-    top.castShadow = true;
-    altarGroup.add(top);
-
-    // --- Carved rune grooves on top surface ---
-    const runeMat = new THREE.MeshStandardMaterial({
-      color: 0x33aaff,
-      emissive: 0x1166aa,
-      emissiveIntensity: 0.6,
-      roughness: 0.3,
-    });
-
-    // Inner rune circle
-    const runeRing = new THREE.Mesh(new THREE.TorusGeometry(1.4, 0.04, 8, 32), runeMat);
-    runeRing.rotation.x = -Math.PI / 2;
-    runeRing.position.set(cx, 1.42, cz);
-    altarGroup.add(runeRing);
-
-    // Rune lines radiating from center (8 directions)
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * Math.PI * 2;
-      const line = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 1.0), runeMat);
-      line.position.set(
-        cx + Math.cos(angle) * 0.7,
-        1.42,
-        cz + Math.sin(angle) * 0.7,
-      );
-      line.rotation.y = -angle + Math.PI / 2;
-      altarGroup.add(line);
-    }
-
-    // Small rune symbols at each line end
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * Math.PI * 2;
-      const symbol = new THREE.Mesh(new THREE.OctahedronGeometry(0.08, 0), runeMat);
-      symbol.position.set(
-        cx + Math.cos(angle) * 1.4,
-        1.44,
-        cz + Math.sin(angle) * 1.4,
-      );
-      altarGroup.add(symbol);
-    }
-
-    // --- Four corner pillars with ancient carvings ---
-    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5c5c68, roughness: 0.7, metalness: 0.2 });
-    const pillarPositions = [
-      [cx - 3.5, cz - 3.5],
-      [cx + 3.5, cz - 3.5],
-      [cx - 3.5, cz + 3.5],
-      [cx + 3.5, cz + 3.5],
-    ];
-
-    for (const [px, pz] of pillarPositions) {
-      // Pillar base
-      const pBase = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.3, 0.9), stoneDark);
-      pBase.position.set(px, 0.15, pz);
-      pBase.castShadow = true;
-      altarGroup.add(pBase);
-
-      // Pillar shaft (tapered)
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.35, 3.0, 6), pillarMat);
-      shaft.position.set(px, 1.8, pz);
-      shaft.castShadow = true;
-      altarGroup.add(shaft);
-
-      // Carved rings on pillar
-      for (let r = 0; r < 3; r++) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.03, 6, 12), stoneMat);
-        ring.position.set(px, 0.8 + r * 0.9, pz);
-        ring.rotation.x = Math.PI / 2;
-        altarGroup.add(ring);
-      }
-
-      // Pillar cap
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.3, 0.3, 6), stoneMat);
-      cap.position.set(px, 3.45, pz);
-      altarGroup.add(cap);
-
-      // Glowing crystal on top
-      const crystalMat = new THREE.MeshStandardMaterial({
-        color: 0x44ccff,
-        emissive: 0x2288cc,
-        emissiveIntensity: 1.0,
-        roughness: 0.1,
-        metalness: 0.4,
-      });
-      const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.2, 0), crystalMat);
-      crystal.position.set(px, 3.85, pz);
-      crystal.rotation.y = Math.PI / 4;
-      crystal.name = 'altar-crystal';
-      altarGroup.add(crystal);
-
-    }
-
-    // --- Central altar stone (the main altar piece) ---
-    const altarMat = new THREE.MeshStandardMaterial({
-      color: 0x7a7a88,
-      roughness: 0.5,
-      metalness: 0.25,
-    });
-    const altarBlock = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.7, 0.6), altarMat);
-    altarBlock.position.set(cx, 1.75, cz);
-    altarBlock.castShadow = true;
-    altarGroup.add(altarBlock);
-
-    // Altar top slab (polished)
-    const slabMat = new THREE.MeshStandardMaterial({
-      color: 0x9090a0,
-      roughness: 0.3,
-      metalness: 0.35,
-    });
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.08, 0.8), slabMat);
-    slab.position.set(cx, 2.14, cz);
-    altarGroup.add(slab);
-
-    // Floating rune orb above altar (spawn indicator)
-    const orbMat = new THREE.MeshStandardMaterial({
-      color: 0x66ddff,
-      emissive: 0x3399cc,
-      emissiveIntensity: 1.2,
-      roughness: 0.05,
-      metalness: 0.5,
-      transparent: true,
-      opacity: 0.85,
-    });
-    const orb = new THREE.Mesh(new THREE.SphereGeometry(0.35, 16, 16), orbMat);
-    orb.position.set(cx, 3.0, cz);
-    orb.name = 'spawn-orb';
-    altarGroup.add(orb);
-
-    // Orb inner glow
-    const orbInner = new THREE.Mesh(
-      new THREE.SphereGeometry(0.2, 12, 12),
-      new THREE.MeshBasicMaterial({ color: 0xaaeeff, transparent: true, opacity: 0.6 }),
-    );
-    orbInner.position.set(cx, 3.0, cz);
-    orbInner.name = 'spawn-orb-inner';
-    altarGroup.add(orbInner);
-
-    // Central light
-    const altarLight = new THREE.PointLight(0x55ccff, 2.5, 12);
-    altarLight.position.set(cx, 3.2, cz);
-    altarGroup.add(altarLight);
-
-    // --- Steps on all 4 sides, attached to altar base edge ---
-    const stepDist = [4.2, 5.2, 6.2, 7.2];
-    const stepY    = [0.28, 0.14, 0.0, -0.1];
-    const stepW    = [2.8, 2.4, 2.0, 1.6];
-
-    // North (-Z) and South (+Z)
-    for (const dir of [-1, 1]) {
-      for (let s = 0; s < 4; s++) {
-        const step = new THREE.Mesh(
-          new THREE.BoxGeometry(stepW[s], 0.2, 0.85),
-          s % 2 === 0 ? stoneMat : stoneLight,
-        );
-        step.position.set(cx, stepY[s], cz + dir * stepDist[s]);
-        step.receiveShadow = true;
-        step.castShadow = true;
-        altarGroup.add(step);
-      }
-    }
-    // East (+X) and West (-X)
-    for (const dir of [-1, 1]) {
-      for (let s = 0; s < 4; s++) {
-        const step = new THREE.Mesh(
-          new THREE.BoxGeometry(0.85, 0.2, stepW[s]),
-          s % 2 === 0 ? stoneMat : stoneLight,
-        );
-        step.position.set(cx + dir * stepDist[s], stepY[s], cz);
-        step.receiveShadow = true;
-        step.castShadow = true;
-        altarGroup.add(step);
-      }
-    }
-
-    // "SPAWN" label
-    const label = this.createTextSign('ALTAR OF REBIRTH', 0x55ccff);
-    label.position.set(cx, 4.8, cz);
-    altarGroup.add(label);
-
-    // Place at end of south path
-    altarGroup.scale.set(0.65, 0.65, 0.65);
-    altarGroup.position.set(0, 0, 15);
-    this.group.add(altarGroup);
-  }
-
   private buildDecorations(batcher: StaticBatcher) {
     // Lanterns — strategically placed around the hub
     const lanternPositions = [
@@ -2081,8 +1342,6 @@ export class HubWorld {
       const t2 = Math.max(0, Math.min(1, (x * 38 + z * -18) / (1444 + 324)));
       const px2 = 38 * t2, pz2 = -18 * t2;
       if (Math.sqrt((x - px2) ** 2 + (z - pz2) ** 2) < 2.5) return true;
-      // South spawn path
-      if (Math.abs(x) < 2.5 && z > 0 && z < 24) return true;
       return false;
     };
 
@@ -2390,10 +1649,7 @@ export class HubWorld {
       this.group.add(bankMesh);
     }
 
-    // Soft blue glow over the river
-    const riverLight = new THREE.PointLight(0x4090d0, 1.0, 25);
-    riverLight.position.set(48, 1.5, 0);
-    this.group.add(riverLight);
+    // River glow removed for performance (emissive water material is sufficient)
   }
 
   private buildLighting() {
@@ -2405,8 +1661,8 @@ export class HubWorld {
     const sun = new THREE.DirectionalLight(0xffecd2, 1.5);
     sun.position.set(25, 40, 15);
     sun.castShadow = true;
-    sun.shadow.mapSize.width = 2048;
-    sun.shadow.mapSize.height = 2048;
+    sun.shadow.mapSize.width = 1024;
+    sun.shadow.mapSize.height = 1024;
     sun.shadow.camera.near = 1;
     sun.shadow.camera.far = 100;
     sun.shadow.camera.left = -40;
@@ -2452,29 +1708,35 @@ export class HubWorld {
 
   // Called each frame for animations
   update(time: number, playerPos?: THREE.Vector3) {
+    // Skip expensive animations for distant objects
+    const px = playerPos?.x ?? 0;
+    const pz = playerPos?.z ?? 0;
+
     // ── Fire brazier animations ────────────────────────────────────
     for (let i = 0; i < this.brazierIndex; i++) {
+      // Distance cull: skip flame animation if brazier is far from player
+      const firstFlame = this.getAnimObj(`brazier-flame-${i}-0`);
+      if (firstFlame) {
+        const dx = firstFlame.userData.baseX - px;
+        const dz = firstFlame.userData.baseZ - pz;
+        if (dx * dx + dz * dz > 900) continue; // >30m away, skip
+      }
       // Flame dance — each of the 3 flame cones sways independently
       for (let f = 0; f < 3; f++) {
-        const flame = this.group.getObjectByName(`brazier-flame-${i}-${f}`);
+        const flame = this.getAnimObj(`brazier-flame-${i}-${f}`);
         if (flame) {
           const phase = i * 2.7 + f * 1.3;
-          // Sway side to side
           flame.position.x = flame.userData.baseX + Math.sin(time * 4.5 + phase) * 0.04;
           flame.position.z = flame.userData.baseZ + Math.cos(time * 3.8 + phase * 0.7) * 0.03;
-          // Flicker height
           flame.position.y = flame.userData.baseY + Math.sin(time * 7 + phase) * 0.04;
-          // Scale flicker
           const flicker = 0.85 + Math.sin(time * 9 + phase) * 0.15;
           flame.scale.set(flicker, 0.7 + Math.sin(time * 6 + phase) * 0.3, flicker);
-          // Opacity flicker
           const mat = (flame as THREE.Mesh).material as THREE.MeshBasicMaterial;
           mat.opacity = (0.65 - f * 0.1) + Math.sin(time * 8 + phase) * 0.2;
         }
       }
-      // Light intensity flicker
       // Ember glow pulse
-      const embers = this.group.getObjectByName(`brazier-embers-${i}`);
+      const embers = this.getAnimObj(`brazier-embers-${i}`);
       if (embers) {
         const mat = (embers as THREE.Mesh).material as THREE.MeshStandardMaterial;
         mat.emissiveIntensity = 1.2 + Math.sin(time * 3 + i * 0.8) * 0.5;
@@ -2485,11 +1747,11 @@ export class HubWorld {
     // Eye glow pulse + eyeball subtle movement
     for (const side of ['L', 'R']) {
       const phase = side === 'L' ? 0 : 1;
-      const eyeLight = this.group.getObjectByName(`dragon-eye-${side}`);
+      const eyeLight = this.getAnimObj(`dragon-eye-${side}`);
       if (eyeLight) {
         (eyeLight as THREE.PointLight).intensity = 2.0 + Math.sin(time * 1.5 + phase) * 1.0;
       }
-      const eyeOrb = this.group.getObjectByName(`dragon-eye-orb-${side}`);
+      const eyeOrb = this.getAnimObj(`dragon-eye-orb-${side}`);
       if (eyeOrb) {
         const baseY = eyeOrb.userData.baseY ?? 4.5;
         // Subtle look-around: slow random-ish rotation
@@ -2501,26 +1763,26 @@ export class HubWorld {
     }
 
     // Portal swirl rotation + pulse
-    const portalDisc = this.group.getObjectByName('dragon-portal-disc');
+    const portalDisc = this.getAnimObj('dragon-portal-disc');
     if (portalDisc) {
       portalDisc.rotation.z = time * 0.3;
       const pMat = (portalDisc as THREE.Mesh).material as THREE.MeshBasicMaterial;
       pMat.opacity = 0.6 + Math.sin(time * 0.8) * 0.2;
     }
-    const portalSwirl = this.group.getObjectByName('dragon-portal-swirl');
+    const portalSwirl = this.getAnimObj('dragon-portal-swirl');
     if (portalSwirl) {
       portalSwirl.rotation.z = -time * 0.6;
       const sMat = (portalSwirl as THREE.Mesh).material as THREE.MeshBasicMaterial;
       sMat.opacity = 0.2 + Math.sin(time * 1.2 + 1.0) * 0.15;
     }
-    const portalLight = this.group.getObjectByName('dragon-portal-light');
+    const portalLight = this.getAnimObj('dragon-portal-light');
     if (portalLight) {
       (portalLight as THREE.PointLight).intensity = 3.0 + Math.sin(time * 1.0) * 1.5;
     }
 
     // Mist drifting from the maw
     for (let i = 0; i < 5; i++) {
-      const mist = this.group.getObjectByName(`dragon-mist-${i}`);
+      const mist = this.getAnimObj(`dragon-mist-${i}`);
       if (mist) {
         mist.position.x += Math.sin(time * 0.3 + i * 1.5) * 0.002;
         mist.position.y += Math.cos(time * 0.2 + i * 0.8) * 0.001;
@@ -2530,14 +1792,14 @@ export class HubWorld {
     }
 
     // Inner skull glow pulse
-    const innerGlow = this.group.getObjectByName('dragon-inner-glow');
+    const innerGlow = this.getAnimObj('dragon-inner-glow');
     if (innerGlow) {
       (innerGlow as THREE.PointLight).intensity = 1.5 + Math.sin(time * 0.8) * 0.6;
     }
 
     // Bone dust particle drift
     for (let i = 0; i < 12; i++) {
-      const dust = this.group.getObjectByName(`dragon-dust-${i}`);
+      const dust = this.getAnimObj(`dragon-dust-${i}`);
       if (dust) {
         dust.position.y += 0.003;
         if (dust.position.y > dust.userData.baseY + 4) {
@@ -2551,7 +1813,7 @@ export class HubWorld {
 
     // Cave fog breathing
     for (let i = 0; i < 3; i++) {
-      const fog = this.group.getObjectByName(`dragon-cave-fog-${i}`);
+      const fog = this.getAnimObj(`dragon-cave-fog-${i}`);
       if (fog) {
         const fMat = (fog as THREE.Mesh).material as THREE.MeshBasicMaterial;
         fMat.opacity = (0.12 - i * 0.03) + Math.sin(time * 0.3 + i * 1.5) * 0.04;
@@ -2561,7 +1823,7 @@ export class HubWorld {
     // Hanging sinew strips gentle sway
     for (const wSide of ['L', 'R']) {
       for (let s = 0; s < 5; s++) {
-        const strip = this.group.getObjectByName(`dragon-strip-${wSide}-${s}`);
+        const strip = this.getAnimObj(`dragon-strip-${wSide}-${s}`);
         if (strip) {
           strip.rotation.z = Math.sin(time * 0.4 + s * 1.2 + (wSide === 'L' ? 0 : 2)) * 0.08;
           strip.rotation.x = Math.sin(time * 0.3 + s * 0.9) * 0.05;
@@ -2569,43 +1831,12 @@ export class HubWorld {
       }
     }
 
-    // Gernal's beard sway
-    const beardTip = this.group.getObjectByName('gernal-beard-tip');
-    if (beardTip) {
-      beardTip.rotation.z = Math.sin(time * 1.2) * 0.08;
-      beardTip.rotation.x = Math.cos(time * 0.9) * 0.05;
-    }
-
-    // Altar crystals
-    this.group.traverse(child => {
-      if (child.name === 'altar-crystal') {
-        child.rotation.y += 0.02;
-        child.rotation.x = Math.sin(time * 1.5) * 0.2;
-        const s = 1 + Math.sin(time * 3) * 0.15;
-        child.scale.set(s, s, s);
-      }
-    });
-
     // ── River flow ────────────────────────────────────────────────
     if (this.riverMesh) {
       const rMat = this.riverMesh.material as THREE.MeshStandardMaterial;
       if (rMat.map) rMat.map.offset.y -= 0.004;
     }
 
-    // Spawn orb
-    const spawnOrb = this.group.getObjectByName('spawn-orb');
-    const spawnOrbInner = this.group.getObjectByName('spawn-orb-inner');
-    if (spawnOrb) {
-      spawnOrb.position.y = 3.0 + Math.sin(time * 1.2) * 0.3;
-      spawnOrb.rotation.y = time * 0.8;
-      spawnOrb.rotation.x = Math.sin(time * 0.5) * 0.3;
-    }
-    if (spawnOrbInner) {
-      spawnOrbInner.position.y = 3.0 + Math.sin(time * 1.2) * 0.3;
-      spawnOrbInner.rotation.y = -time * 1.2;
-      const pulse = 0.8 + Math.sin(time * 4) * 0.2;
-      spawnOrbInner.scale.set(pulse, pulse, pulse);
-    }
   }
 
   dispose(scene: THREE.Scene) {

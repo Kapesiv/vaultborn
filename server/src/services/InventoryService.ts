@@ -2,8 +2,10 @@ import { getDB, saveDB } from '../db/index.js';
 import {
   BLACKSMITH_SHOP, getDefaultSellPrice, INVENTORY_MAX_SLOTS, ITEM_DEFS,
   RARITY_BONUS_STATS, MAX_HOTBAR_SLOTS, MELEE_SKILL_TREE,
+  CLASS_DEFS, VALID_CLASS_IDS,
   type ItemInstance, type BonusStat, type Rarity,
   type SkillAllocation, type HotbarSlot,
+  type CharacterClassId,
 } from '@saab/shared';
 
 const BONUS_STAT_POOL: BonusStat['stat'][] = [
@@ -30,24 +32,38 @@ function genId(): string {
 
 export class InventoryService {
   /** Ensure player row exists, return gold */
-  ensurePlayer(playerId: string, name: string): number {
+  ensurePlayer(playerId: string, name: string, classId: CharacterClassId = 'warrior'): number {
     const db = getDB();
     const rows = db.exec('SELECT gold FROM players WHERE id = ?', [playerId]);
     if (rows.length && rows[0].values.length) {
       return rows[0].values[0][0] as number;
     }
+
+    const classDef = CLASS_DEFS[classId];
+    const s = classDef.startingStats;
     db.run(
-      'INSERT INTO players (id, name, created_at) VALUES (?, ?, ?)',
-      [playerId, name, Date.now()],
+      'INSERT INTO players (id, name, strength, intelligence, dexterity, vitality, class, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [playerId, name, s.strength, s.intelligence, s.dexterity, s.vitality, classId, Date.now()],
     );
     saveDB();
 
-    // Starter kit for new players
-    this.addItem(playerId, 'wooden_sword', 'common');
-    this.addItem(playerId, 'leather_vest', 'common');
+    // Class-specific starter kit
+    this.addItem(playerId, classDef.startingWeapon, 'common');
+    this.addItem(playerId, classDef.startingArmor, 'common');
     this.addItem(playerId, 'health_potion', 'common', undefined, 3);
 
     return 100; // default gold
+  }
+
+  loadPlayerClass(playerId: string): CharacterClassId {
+    const rows = getDB().exec('SELECT class FROM players WHERE id = ?', [playerId]);
+    if (rows.length && rows[0].values.length) {
+      const cls = rows[0].values[0][0] as string;
+      if (VALID_CLASS_IDS.includes(cls as CharacterClassId)) {
+        return cls as CharacterClassId;
+      }
+    }
+    return 'warrior';
   }
 
   getGold(playerId: string): number {

@@ -1,7 +1,7 @@
 import { Room, Client } from '@colyseus/core';
 import { HubState } from '../state/GameState.js';
 import { PlayerState, Vec3State, PlayerStatsState } from '../state/PlayerState.js';
-import { computeMovement, validatePlayerInput, HUB_MAX_PLAYERS, HUB_SYNC_RATE, type PlayerInput } from '@saab/shared';
+import { computeMovement, validatePlayerInput, HUB_MAX_PLAYERS, HUB_SYNC_RATE, CLASS_DEFS, VALID_CLASS_IDS, type PlayerInput, type CharacterClassId } from '@saab/shared';
 import { InventoryService } from '../services/InventoryService.js';
 
 export class HubRoom extends Room<HubState> {
@@ -81,7 +81,9 @@ export class HubRoom extends Room<HubState> {
         if (player) {
           const passive = this.inventory.computePassiveStats(client.sessionId);
           const saved = this.inventory.loadPlayerStats(client.sessionId);
-          const baseMaxHp = 100 + (saved.level - 1) * 10;
+          const classId = this.inventory.loadPlayerClass(client.sessionId);
+          const classDef = CLASS_DEFS[classId];
+          const baseMaxHp = classDef.maxHpBase + (saved.level - 1) * 10;
           player.stats.maxHp = Math.floor(baseMaxHp * passive.maxHpMult);
           player.stats.hp = Math.min(player.stats.hp, player.stats.maxHp);
         }
@@ -108,19 +110,29 @@ export class HubRoom extends Room<HubState> {
     console.log('HubRoom created');
   }
 
-  onJoin(client: Client, options: { name?: string; gender?: string }) {
+  onJoin(client: Client, options: { name?: string; gender?: string; classId?: string }) {
     const playerName = options.name || `Player_${client.sessionId.slice(0, 4)}`;
 
-    // Ensure player exists in DB
-    this.inventory.ensurePlayer(client.sessionId, playerName);
+    // Validate classId
+    const classId: CharacterClassId = VALID_CLASS_IDS.includes(options.classId as CharacterClassId)
+      ? (options.classId as CharacterClassId)
+      : 'warrior';
+
+    // Ensure player exists in DB (uses classId for new players only)
+    this.inventory.ensurePlayer(client.sessionId, playerName, classId);
+
+    // Load the persisted class (returning players keep their original class)
+    const resolvedClassId = this.inventory.loadPlayerClass(client.sessionId);
+    const classDef = CLASS_DEFS[resolvedClassId];
 
     const player = new PlayerState();
     player.id = client.sessionId;
     player.name = playerName;
     player.gender = options.gender === 'female' ? 'female' : 'male';
+    player.classId = resolvedClassId;
     player.position = new Vec3State();
 
-    // Spawn outside the fountain (radius ~3.6) and altar area
+    // Spawn outside the fountain (radius ~3.6)
     const angle = Math.random() * Math.PI * 2;
     const dist = 8 + Math.random() * 4;
     player.position.x = Math.cos(angle) * dist;
@@ -136,12 +148,12 @@ export class HubRoom extends Room<HubState> {
     stats.intelligence = saved.intelligence;
     stats.dexterity = saved.dexterity;
     stats.vitality = saved.vitality;
-    // Apply passive bonuses
+    // Apply passive bonuses with class-specific base HP/mana
     const passive = this.inventory.computePassiveStats(client.sessionId);
-    const baseMaxHp = 100 + (saved.level - 1) * 10;
+    const baseMaxHp = classDef.maxHpBase + (saved.level - 1) * 10;
     stats.maxHp = Math.floor(baseMaxHp * passive.maxHpMult);
     stats.hp = stats.maxHp;
-    stats.maxMana = 50 + (saved.level - 1) * 5;
+    stats.maxMana = classDef.maxManaBase + (saved.level - 1) * 5;
     stats.mana = stats.maxMana;
     stats.skillPoints = this.inventory.getSkillPoints(client.sessionId);
     player.stats = stats;

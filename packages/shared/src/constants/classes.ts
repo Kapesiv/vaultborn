@@ -1,0 +1,58 @@
+import type { CharacterClassId, ClassDef } from '../types/class.js';
+
+export const CLASS_DEFS: Record<CharacterClassId, ClassDef> = {
+  warrior: {
+    id: 'warrior',
+    name: 'Warrior',
+    description: 'A stalwart defender who excels in close combat. High vitality and strength make the Warrior a natural frontliner.',
+    startingStats: { strength: 15, intelligence: 6, dexterity: 8, vitality: 14 },
+    startingWeapon: 'wooden_sword',
+    startingArmor: 'leather_vest',
+    primarySkillTree: 'melee',
+    modelPath: '/models/player.glb',
+    color: '#cc3333',
+    maxHpBase: 120,
+    maxManaBase: 30,
+  },
+  mage: {
+    id: 'mage',
+    name: 'Mage',
+    description: 'A wielder of arcane forces with devastating spells. Fragile in melee but unmatched in magical power.',
+    startingStats: { strength: 5, intelligence: 18, dexterity: 7, vitality: 8 },
+    startingWeapon: 'apprentice_staff',
+    startingArmor: 'cloth_robe',
+    primarySkillTree: 'fire',
+    modelPath: '/models/player.glb',
+    color: '#4488ff',
+    maxHpBase: 80,
+    maxManaBase: 80,
+  },
+  ranger: {
+    id: 'ranger',
+    name: 'Ranger',
+    description: 'A swift hunter who strikes from afar. Balanced stats with high dexterity for critical hits and evasion.',
+    startingStats: { strength: 8, intelligence: 8, dexterity: 16, vitality: 10 },
+    startingWeapon: 'shortbow',
+    startingArmor: 'leather_vest',
+    primarySkillTree: 'ranged',
+    modelPath: '/models/player.glb',
+    color: '#44aa44',
+    maxHpBase: 100,
+    maxManaBase: 50,
+  },
+  rogue: {
+    id: 'rogue',
+    name: 'Rogue',
+    description: 'A cunning assassin who thrives in the shadows. Lightning-fast attacks and the highest crit potential.',
+    startingStats: { strength: 10, intelligence: 8, dexterity: 17, vitality: 8 },
+    startingWeapon: 'rusty_daggers',
+    startingArmor: 'leather_vest',
+    primarySkillTree: 'shadow',
+    modelPath: '/models/player.glb',
+    color: '#aa44cc',
+    maxHpBase: 90,
+    maxManaBase: 50,
+  },
+};
+
+export const VALID_CLASS_IDS: CharacterClassId[] = ['warrior', 'mage', 'ranger', 'rogue'];

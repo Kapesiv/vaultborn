@@ -95,6 +95,10 @@ export class InputManager {
     return false;
   }
 
+  isSpaceHeld(): boolean {
+    return this.keys.get('Space') === true;
+  }
+
   isCrouching(): boolean {
     if (this.keys.get('ControlLeft') === true || this.keys.get('ControlRight') === true) return true;
     if (this.touch.isActive() && this.touch.getInput().crouch) return true;

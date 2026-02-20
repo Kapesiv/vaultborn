@@ -4,7 +4,7 @@ import { SceneManager } from './core/SceneManager.js';
 import { CameraController } from './core/CameraController.js';
 import { InputManager } from './core/InputManager.js';
 import { NetworkManager, type RoomType } from './network/NetworkManager.js';
-import { LocalPlayer, type Gender } from './entities/LocalPlayer.js';
+import { LocalPlayer } from './entities/LocalPlayer.js';
 import { RemotePlayer } from './entities/RemotePlayer.js';
 import { MonsterEntity } from './entities/Monster.js';
 import { ProjectileEntity } from './entities/Projectile.js';
@@ -27,7 +27,7 @@ import { FloatingDamageSystem } from './systems/FloatingDamageSystem.js';
 import { inventoryManager } from './systems/InventoryManager.js';
 import { skillManager } from './systems/SkillManager.js';
 import { setNetworkManager } from './network/actions.js';
-import { CLIENT_INPUT_RATE } from '@saab/shared';
+import { CLIENT_INPUT_RATE, CLASS_DEFS, VALID_CLASS_IDS, type CharacterClassId } from '@saab/shared';
 import { characterLoader } from './entities/CharacterLoader.js';
 import { NPCAIManager } from './ai/NPCAIManager.js';
 import { mountAINPCDialog, hideAINPCDialog as hideAIDialog } from './ai/ui/AINPCDialog.js';
@@ -63,7 +63,7 @@ export class Game {
   private currentRoom: RoomType = 'hub';
   private hudState: HUDState | null = null;
   private playerName = 'Adventurer';
-  private playerGender: Gender = 'male';
+  private playerClassId: CharacterClassId = 'warrior';
 
   private portalCooldown = 0; // prevent spam
   private npcCooldown = 0;
@@ -74,7 +74,6 @@ export class Game {
   private floorInfo: FloorInfo | null = null;
   private floorClearedShowing = false;
   private npcAI = new NPCAIManager();
-
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.renderer = new Renderer(canvas);
@@ -188,9 +187,9 @@ export class Game {
     this.canvas.requestPointerLock();
   }
 
-  async connect(playerName: string, gender: Gender = 'male') {
+  async connect(playerName: string, classId: CharacterClassId = 'warrior') {
     this.playerName = playerName;
-    this.playerGender = gender;
+    this.playerClassId = classId;
     this.network.onMessage = (type, data) => this.handleMessage(type, data);
 
     // Pre-load character model
@@ -200,8 +199,8 @@ export class Game {
     this.floatingDamage = new FloatingDamageSystem(this.sceneManager.scene);
     this.hubWorld = new HubWorld(this.sceneManager.scene);
 
-    const room = await this.network.joinRoom('hub', { name: playerName, gender });
-    this.localPlayer = new LocalPlayer(this.sceneManager.scene, gender);
+    const room = await this.network.joinRoom('hub', { name: playerName, classId });
+    this.localPlayer = new LocalPlayer(this.sceneManager.scene, classId);
     this.localPlayer.setWorldColliders(this.hubWorld.colliders);
     this.setupRoomListeners(room);
     this.currentRoom = 'hub';
@@ -218,14 +217,16 @@ export class Game {
     this.renderer.setupPostProcessing(this.sceneManager.scene, this.camera.camera);
 
     this.startLoop();
+
   }
 
   private setupRoomListeners(room: any) {
     room.state.players.onAdd((player: any, sessionId: string) => {
       console.log('[DEBUG] onAdd player:', sessionId, 'name:', player.name, 'local:', this.network.getSessionId());
       if (sessionId === this.network.getSessionId()) return;
-      const gender = (player.gender === 'female' ? 'female' : 'male') as Gender;
-      const remote = new RemotePlayer(this.sceneManager.scene, sessionId, player.name, gender);
+      const remoteClassId = VALID_CLASS_IDS.includes(player.classId as CharacterClassId)
+        ? (player.classId as CharacterClassId) : 'warrior';
+      const remote = new RemotePlayer(this.sceneManager.scene, sessionId, player.name, remoteClassId);
       remote.targetPosition.set(player.position.x, player.position.y, player.position.z);
       remote.mesh.position.copy(remote.targetPosition);
       this.remotePlayers.set(sessionId, remote);
@@ -333,11 +334,11 @@ export class Game {
       }
     }
 
-    const room = await this.network.joinRoom(roomType, { ...options, name: this.playerName, gender: this.playerGender });
+    const room = await this.network.joinRoom(roomType, { ...options, name: this.playerName, classId: this.playerClassId });
     this.setupRoomListeners(room);
 
     if (this.localPlayer) {
-      this.localPlayer.position.set(0, roomType === 'hub' ? 0.91 : 0, roomType === 'dungeon' ? -8 : 16);
+      this.localPlayer.position.set(0, 0, roomType === 'dungeon' ? -8 : 10);
       // Enable world colliders only in hub
       this.localPlayer.setWorldColliders(roomType === 'hub' && this.hubWorld ? this.hubWorld.colliders : []);
     }
@@ -481,6 +482,7 @@ export class Game {
     }
   }
 
+
   private startLoop() {
     const loop = () => {
       requestAnimationFrame(loop);
@@ -509,26 +511,27 @@ export class Game {
     this.portalCooldown = Math.max(0, this.portalCooldown - dt);
     this.npcCooldown = Math.max(0, this.npcCooldown - dt);
 
-    // Mouse look
     const mouse = this.input.consumeMouse();
     this.camera.onMouseMove(mouse.dx, mouse.dy);
 
     // Check movement state every frame (for smooth animations)
     const freeLook = this.camera.isFreeLook();
     this.isMoving = freeLook ? false : this.input.isMoving();
+    const sprinting = freeLook ? false : this.input.isSprinting();
 
-    // Apply movement every render frame for smooth motion
     if (this.localPlayer) {
       const jump = this.input.consumeJump();
       this.localPlayer.applyFrameMovement(
         this.camera.getYaw(), dt,
         this.input.isKey('KeyW'), this.input.isKey('KeyS'),
         this.input.isKey('KeyA'), this.input.isKey('KeyD'),
-        jump,
+        jump, sprinting,
       );
+    } else {
+      this.input.consumeJump();
     }
 
-    // Send network input at fixed rate (20Hz) for server reconciliation
+    // Send network input at fixed rate (20Hz)
     this.inputTimer += dt;
     if (!freeLook && this.inputTimer >= this.inputInterval && this.localPlayer) {
       this.inputTimer = 0;
@@ -568,7 +571,6 @@ export class Game {
     }
 
     // Update entities
-    const sprinting = freeLook ? false : this.input.isSprinting();
     const crouching = this.input.isCrouching();
     const movingBackward = !freeLook && this.input.isKey('KeyS') && !this.input.isKey('KeyW');
     this.localPlayer?.update(dt, this.elapsedTime, this.isMoving, freeLook ? undefined : this.camera.getYaw(), sprinting, crouching, movingBackward);
@@ -582,7 +584,6 @@ export class Game {
     // Projectiles
     this.projectiles.forEach(p => p.update(dt));
 
-    // Camera (Fortnite-style smooth follow)
     if (this.localPlayer) {
       this.camera.update(this.localPlayer.position, dt);
     }
@@ -618,9 +619,7 @@ export class Game {
         for (const npc of this.hubWorld.npcPositions) {
           const dist = pos.distanceTo(npc.position);
           if (dist < 3) {
-            if (npc.name === 'Gernal') {
-              showShopPanel();
-            } else if (this.npcAI.hasProfile(npc.npcId) && this.npcAI.isReady()) {
+            if (this.npcAI.hasProfile(npc.npcId) && this.npcAI.isReady()) {
               this.npcAI.interact(npc.npcId);
             } else {
               showNPCDialog(npc.name, npc.dialog);

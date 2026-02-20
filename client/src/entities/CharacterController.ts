@@ -158,6 +158,21 @@ export class CharacterController {
       console.log('[CharacterController] Using loaded crouch animation from FBX');
     }
 
+    // CrouchIdle fallback — reuse crouch animation if no dedicated crouchIdle loaded
+    if (!this.getAction('crouchIdle')) {
+      const crouchAction = this.getAction('crouch');
+      if (crouchAction) {
+        const crouchIdleClip = crouchAction.getClip().clone();
+        crouchIdleClip.name = 'crouchIdle';
+        const crouchIdleAction = this.mixer.clipAction(crouchIdleClip);
+        crouchIdleAction.timeScale = 0.5;
+        this.actions.set('crouchIdle', crouchIdleAction);
+        console.log('[CharacterController] CrouchIdle fallback: using crouch at 0.5x speed');
+      }
+    } else {
+      console.log('[CharacterController] Using loaded crouchIdle animation');
+    }
+
     // Start idle animation immediately to avoid T-pose
     const idleAction = this.getAction('idle');
     if (idleAction) {

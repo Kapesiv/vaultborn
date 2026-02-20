@@ -6,9 +6,8 @@ export class SceneManager {
 
   constructor() {
     this.scene = new THREE.Scene();
-    // Atmospheric fog - dark to match night sky
+    // Atmospheric fog
     this.scene.fog = new THREE.FogExp2(0x0a0a1a, 0.008);
-    this.setupSkybox();
   }
 
   private setupSkybox() {

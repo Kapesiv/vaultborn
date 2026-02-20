@@ -14,7 +14,7 @@ export const NPC_PROFILES: Record<string, NPCProfile> = {
 Your knowledge:
 - The Dark Forest to the north grows more dangerous each season. Ancient treants and giant spiders lurk within.
 - The cave entrance leads to dungeon floors filled with monsters.
-- Gernal the shopkeeper sells weapons and armor. Wood scraps and wolf pelts can be used for crafting.
+- The village shopkeeper sells weapons and armor. Wood scraps and wolf pelts can be used for crafting.
 - Battlemaster Toivo oversees the PvP arena where warriors test their skills.
 - Scout Aino patrols the forest border and knows the most about the creatures within.
 - You have watched over this village for decades and care deeply about its people.

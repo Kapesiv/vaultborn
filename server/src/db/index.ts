@@ -89,6 +89,7 @@ export async function initDB(): Promise<Database> {
   try { db.run('ALTER TABLE players ADD COLUMN gold INTEGER NOT NULL DEFAULT 100'); } catch (_) {}
   try { db.run('ALTER TABLE items ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1'); } catch (_) {}
   try { db.run('ALTER TABLE players ADD COLUMN skill_points INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+  try { db.run("ALTER TABLE players ADD COLUMN class TEXT NOT NULL DEFAULT 'warrior'"); } catch (_) {}
 
   saveDB();
   return db;
