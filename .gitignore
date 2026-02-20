@@ -8,6 +8,7 @@ dist/
 .env.*
 *.log
 *.tsbuildinfo
+/release/
 .DS_Store
 Thumbs.db
 *.fbx
