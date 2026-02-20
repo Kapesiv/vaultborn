@@ -22,6 +22,7 @@ import { mountFloorClearedPanel, showFloorCleared, showDungeonComplete, hideFloo
 import { mountLevelUpEffect, showLevelUp } from './ui/LevelUpEffect.js';
 import { mountSkillTreePanel, toggleSkillTreePanel, hideSkillTreePanel } from './ui/SkillTreePanel.js';
 import { mountSkillHotbar } from './ui/SkillHotbar.js';
+import { mountChatPanel, addChatMessage, focusChat } from './ui/ChatPanel.js';
 import { MusicSystem } from './systems/MusicSystem.js';
 import { FloatingDamageSystem } from './systems/FloatingDamageSystem.js';
 import { inventoryManager } from './systems/InventoryManager.js';
@@ -135,6 +136,9 @@ export class Game {
     mountSkillTreePanel(uiOverlay);
     mountSkillHotbar(uiOverlay);
     mountAINPCDialog(uiOverlay);
+    mountChatPanel(uiOverlay, (message) => {
+      this.network.sendMessage('chat', message);
+    });
 
     // ESC to close panels / toggle pause
     window.addEventListener('keydown', (e) => {
@@ -156,6 +160,9 @@ export class Game {
       }
       if (e.code === 'KeyK') {
         if (!this.paused) toggleSkillTreePanel();
+      }
+      if (e.code === 'Enter') {
+        if (!this.paused) focusChat();
       }
     });
   }
@@ -461,6 +468,8 @@ export class Game {
       this.spawnProjectile(data);
     } else if (type === 'projectile_destroy') {
       this.destroyProjectile(data.id);
+    } else if (type === 'chat') {
+      addChatMessage(data.name, data.message);
     }
   }
 

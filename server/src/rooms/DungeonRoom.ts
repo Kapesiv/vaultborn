@@ -210,6 +210,13 @@ export class DungeonRoom extends Room<DungeonState> {
       client.send('skills_full', { allocations, hotbar, skillPoints });
     });
 
+    this.onMessage('chat', (client: Client, message: string) => {
+      if (typeof message !== 'string' || message.length > 200) return;
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+      this.broadcast('chat', { name: player.name, message }, { except: client });
+    });
+
     // Health potion / consumable usage
     this.onMessage('use_item', (client: Client, data: { defId: string }) => {
       if (!data || typeof data.defId !== 'string') return;
