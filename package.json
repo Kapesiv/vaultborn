@@ -6,12 +6,17 @@
     "client",
     "server"
   ],
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:client": "npm run dev -w client",
     "dev:server": "npm run dev -w server",
     "build": "npm run build -w packages/shared && concurrently \"npm run build -w client\" \"npm run build -w server\"",
-    "start": "npm run start -w server"
+    "start": "npm run start -w server",
+    "desktop": "electron .",
+    "desktop:dev": "npm run build && electron .",
+    "desktop:pack": "npm run build && electron-builder --dir",
+    "desktop:dist": "npm run build && electron-builder"
   },
   "engines": {
     "node": ">=20"
@@ -19,6 +24,8 @@
   "devDependencies": {
     "@gltf-transform/cli": "^4.3.0",
     "concurrently": "^9.1.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
     "fbx2gltf": "^0.9.7-p1",
     "typescript": "^5.7.0"
   }

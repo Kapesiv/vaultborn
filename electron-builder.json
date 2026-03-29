@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.saab.game",
+  "productName": "SAAB",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "desktop/**/*",
+    "client/dist/**/*",
+    "server/dist/**/*",
+    "packages/shared/dist/**/*",
+    "server/node_modules/**/*",
+    "packages/shared/node_modules/**/*",
+    "node_modules/fastify/**/*",
+    "node_modules/@fastify/**/*",
+    "node_modules/@colyseus/**/*",
+    "node_modules/colyseus.js/**/*",
+    "node_modules/sql.js/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "data",
+      "to": "data",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": ["nsis"],
+    "icon": null
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "category": "Game"
+  },
+  "mac": {
+    "target": ["dmg"],
+    "category": "public.app-category.games"
+  }
+}
